@@ -1,0 +1,10 @@
+[package]
+name = "NootStandard"
+version = "0.1.2"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework", rev = "devnet" }
+
+[addresses]
+noot =  "0x3"
+sui = "0x2"
