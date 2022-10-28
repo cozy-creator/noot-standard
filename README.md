@@ -1,4 +1,4 @@
-![Move_VM](./static/move_vm_machine.png 'Sui Move Factory')
+![Move_VM](./static/move_vm_factory.png 'Sui Move Factory')
 
 **Noot:** a programmable unit of ownership. (plural: noots)
 
@@ -60,6 +60,10 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Create-family should start off with passing a vector-map
+- Inventory-adding functions
+- Stackable noots
+- Figure out how to get all the package-addresses to match up at the same time
 - Begin on V1, which will incorporate dynamic fields / dynamic objects where possible. I still think the data-object should be a separate object (not owned by the noot itself)
 - Come up with many-to-one noot -> data relationship
 - Come up with actual data-editing abilities
@@ -105,3 +109,17 @@ We should make sure these are not possible.
 **Partially Owned Noot:** a noot is 'partially owned' if its transfer_cap is outside of itself. The noot CAN be claimed by an external process.
 
 **Noot Dispenser:** a module that is pre-loaded with a fixed supply of NootDNA. It accepts coins, and returns NootDNA, which is used to craft a Noot.
+
+### Problem with this
+
+Suppose you want to have composable noots, like you have 5 noots that combine into being one noot. How can we do that?
+
+- We can't store the 5 piece noots, because they do not have 'store'. If they did have store, they'd be arbitrarily transferable (on Sui, not on module-ownership). So we could solve his by saying 'fuck it' and adding 'store' to noots, and leaning on module-ownership and ignoring Sui-ownership.
+- Child-objects are not possible, because again, the same reason as above.
+- We could take the transfer caps out of each of the noots, and then lock them inside of the combined-noot. We'd effectively just allow the component-noots to continue to exist, but you couldn't sell or transfer them, but you could still continue to use them individually if you wanted, which would be a little weird; or maybe we could stop that by putting the owner as 'bricked' or value essentially meaning it no longer exists. If you did sell the combined-noot, whoever has it could take out the transfer caps and reclaim the other noots.
+-
+
+### Thoughts:
+
+- Should noot.data_id be optional? Would we want to create a noot which DOESN'T have corresponding data? In that case it would be impossible to display it; it would be kind of an incomplete Noot.
+-

@@ -4,7 +4,9 @@ module noot::noot {
     use sui::tx_context::{Self, TxContext};
     use sui::transfer;
     use sui::vec_map::{Self, VecMap};
-    use std::string::String;
+    use sui::dynamic_object_field;
+    use std::string::{Self, String};
+    use std::vector;
 
     const EBAD_WITNESS: u64 = 0;
     const ENOT_OWNER: u64 = 1;
@@ -12,23 +14,27 @@ module noot::noot {
     const EWRONG_TRANSFER_CAP: u64 = 3;
     const ETRANSFER_CAP_ALREADY_EXISTS: u64 = 4;
     const EINSUFFICIENT_FUNDS: u64 = 5;
+    const EINCORRECT_DATA_REFERENCE: u64 = 6;
 
-    // Do not add 'store' to Noot or NootData. Keeping them non-storable means that they cannot be
-    // transferred using polymorphic transfer (transfer::transfer), meaning the market can define its
-    // own transfer function.
-    // Unbound generic type
-    struct Noot<phantom T, phantom M> has key {
+    // T is a witness produced by the defining-module, such as 'Minecraft' or 'Outlaw_Sky'
+    // M is a witness produced by the market-module, which defines how the noot may be transferred
+    struct Noot<phantom T, phantom M> has key, store {
         id: UID,
+        quantity: u64,
         owner: option::Option<address>,
-        data_id: option::Option<ID>,
-        transfer_cap: option::Option<TransferCap<T, M>>
+        transfer_cap: option::Option<TransferCap<T, M>>,
+        default_data_key: vector<u8>,
+        // TO DO: after Sui natively supports the ability to enumerate children, remove this field
+        child_index: vector<vector<u8>>
     }
 
     // TODO: Replace VecMap with a more efficient data structure once one becomes a available within Sui
-    // VecMap only has O(N) lookup time, which is better than an actual map up until about 100 items
-    // Invariant: Make sure that if this data ever gets deleted, the noot must be present as well.
-    // Otherwise there could be a situation where a Noot is pointing to a non-existent data object.
-    struct NootData<phantom T, D: store + copy + drop> has key {
+    // VecMap only has O(N) lookup time, which is better than an actual map up until about 100 items.
+    //
+    // We do not allow the deleting of NootData after creation; we have no way of guaranteeing that there
+    // isn't Noot pointing to this NootData ID. If we allowed for NootData deletion, those Noots could
+    // be left pointing to null-data.
+    struct NootData<phantom T, D: store + copy + drop> has key, store {
         id: UID,
         display: VecMap<String, String>,
         body: D
@@ -39,7 +45,8 @@ module noot::noot {
     }
 
     // One one of these will exist per noot-type, and they will initially be owned by the type creator
-    struct NootTypeInfo<phantom T> has key {
+    // They will contain dynamic fields indexed by default_data_key, giving noots default data
+    struct NootFamilyData<phantom T> has key, store {
         id: UID,
         display: VecMap<String, String>
     }
@@ -56,29 +63,22 @@ module noot::noot {
     // Create a new collection type `T` and return the `CraftingCap` and `RoyaltyCap` for
     // `T` to the caller. Can only be called with a `one-time-witness` type, ensuring
     // that there will only ever be one of each cap per `T`.
-    public fun create_type<W: drop, T: drop>(
+    public fun create_family<W: drop, T: drop>(
         one_time_witness: W,
         _type_witness: T,
         ctx: &mut TxContext
-    ): NootTypeInfo<T> {
-        // Make sure there's only one instance of the type T
+    ): NootFamilyData<T> {
         assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
 
         // TODO: add events
         // event::emit(CollectionCreated<T> {
         // });
 
-        NootTypeInfo<T> {
+        NootFamilyData<T> {
             id: object::new(ctx),
             display: vec_map::empty<String, String>()
         }
     }
-
-    // Once the CraftingCap is destroyed, new dItems cannot be created within this collection
-    // public entry fun destroy_crafting_cap<T>(crafting_cap: CraftingCap<T>) {
-    //     let CraftingCap { id } = crafting_cap;
-    //     object::delete(id);
-    // }
 
     public entry fun craft_<T: drop, M: drop, D: store + copy + drop>(
         witness: T, 
@@ -101,11 +101,13 @@ module noot::noot {
 
         Noot {
             id: uid,
+            quantity: 1,
             owner: owner,
-            data_id: option::some(object::id(data)),
             transfer_cap: option::some(TransferCap<T, M> {
                 for: id
-            })
+            }),
+            default_data_key: b"data",
+            child_index: vector::empty<vector<u8>>()
         }
     }
 
@@ -122,25 +124,34 @@ module noot::noot {
         }
     }
 
-    public fun borrow_data_body<T: drop, D: store + copy + drop>(
-        _witness: T,
-        noot_data: &mut NootData<T, D>): &mut D
-    {
-        &mut noot_data.body
+    // We do not currently allow noots missing their transfer caps to be deconstructed
+    // We only allow the defining-module to perform deconstruction
+    // Noots can be deconstructed by someone other than the owner
+    //
+    // TO DO: enumerate and return child objects
+    public fun deconstruct<T: drop, M>(_witness: T, noot: Noot<T, M>) {
+        assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
+
+        let Noot { id, quantity: _, owner: _, transfer_cap, default_data_key: _, child_index: _ } = noot;
+        let TransferCap { for: _ } = option::destroy_some(transfer_cap);
+        object::delete(id);
     }
 
     // === Market Functions, for Noot marketplaces ===
 
     // Only the corresponding market-module, the module that can produce the witness M, can
     // extract the owner cap. As long as the market-module keeps the transfer_cap in its
-    // possession, no other module can use it
+    // possession, no other module can use it.
+    //
+    // The market should run its own check to make sure the transaction sender is the owner,
+    // otherwise it could allow theft. We do not check here, to allow for the market to define
+    // it's own permissioning-system
+    // assert!(is_owner(tx_context::sender(ctx), &noot), ENOT_OWNER);
     public fun extract_transfer_cap<T: drop, M: drop>(
         _witness: M, 
-        noot: Noot<T, M>,
-        ctx: &mut TxContext): TransferCap<T, M>
+        noot: Noot<T, M>): TransferCap<T, M>
     {
         assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
-        assert!(is_owner(tx_context::sender(ctx), &noot), ENOT_OWNER);
 
         let transfer_cap = option::extract(&mut noot.transfer_cap);
         transfer::share_object(noot);
@@ -206,12 +217,32 @@ module noot::noot {
         transfer::share_object(noot_data);
     }
 
-    // === TypeInfo Functions ===
+    // === FamilyData Functions ===
 
-    // TypeInfo does not have 'store', meaning that external modules cannot use the transfer::transfer
+    // NootFamilyData does not have 'store', meaning that external modules cannot use the transfer::transfer
     // polymorphic transfer in order to change ownership. As such this function is necessary
-    public entry fun transfer_type_info<T>(type_info: NootTypeInfo<T>, send_to: address) {
-        transfer::transfer(type_info, send_to);
+    public entry fun transfer_family_data<T>(family_info: NootFamilyData<T>, send_to: address) {
+        transfer::transfer(family_info, send_to);
+    }
+
+    public fun borrow_family_data_mut<T: drop>(_witness: T, family_data: &mut NootFamilyData<T>): &mut VecMap<String, String> {
+        &mut family_data.display
+    }
+
+    public fun add_family_data<T: drop, D: store + copy + drop>(
+        witness: T, 
+        family_info: &mut NootFamilyData<T>, 
+        key: vector<u8>,
+        display: VecMap<String, String>,
+        data: D,
+        ctx: &mut TxContext)
+    {
+        let noot_data = create_data(witness, display, data, ctx);
+        dynamic_object_field::add(&mut family_info.id, key, noot_data)
+    }
+
+    public fun borrow_family_data<T, D: store + copy + drop>(family_data: &NootFamilyData<T>, key: vector<u8>): &NootData<T, D> {
+        dynamic_object_field::borrow(&family_data.id, key)
     }
 
     // === Authority Checking Functions ===
@@ -224,22 +255,45 @@ module noot::noot {
         }
     }
 
-    public fun is_correct_data<T, M, D: store + copy + drop>(
-        noot: &Noot<T, M>,
-        noot_data: &NootData<T, D>): bool
-    {
-        if (option::is_none(&noot.data_id)) {
-            return false
-        };
-        let data_id = option::borrow(&noot.data_id);
-        (data_id == &object::id(noot_data))
-    }
-
     public fun is_fully_owned<T, M>(noot: &Noot<T, M>): bool {
         option::is_some(&noot.transfer_cap)
     }
 
     public fun is_correct_transfer_cap<T, M>(noot: &Noot<T, M>, transfer_cap: &TransferCap<T, M>): bool {
         transfer_cap.for == object::id(noot)
+    }
+
+    // === Data Accessors ===
+
+    public fun borrow_data<T, M, D: store + drop + copy>(
+        noot: &Noot<T, M>,
+        default_data: &NootData<T, D>): (&VecMap<String, String>, &D)
+    {
+        if (dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, b"data")) {
+            let data = dynamic_object_field::borrow<vector<u8>, NootData<T, D>>(&noot.id, b"data");
+            (&data.display, &data.body)
+        } else {
+            assert!(is_correct_data(noot, default_data), EINCORRECT_DATA_REFERENCE);
+            (&default_data.display, &default_data.body)
+        }
+    }
+
+    public fun borrow_data_mut<T, M, D: store + drop + copy>(
+        noot: &mut Noot<T, M>,
+        default_data: &NootData<T, D>,
+        ctx: &mut TxContext): (&mut VecMap<String, String>, &mut D)
+    {
+        if (!dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, b"data")) {
+            assert!(is_correct_data(noot, default_data), EINCORRECT_DATA_REFERENCE);
+            let data_copy = NootData<T, D> {
+                id: object::new(ctx),
+                display: *&default_data.display,
+                body: *&default_data.body    
+            };
+            dynamic_object_field::add(&mut noot.id, b"data", data_copy);
+        };
+
+        let noot_data = dynamic_object_field::borrow_mut<vector<u8>, NootData<T, D>>(&mut noot.id, b"data");
+        (&mut noot_data.display, &mut noot_data.body)
     }
 }

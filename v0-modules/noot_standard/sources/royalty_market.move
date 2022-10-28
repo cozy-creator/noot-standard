@@ -93,7 +93,7 @@ module noot::royalty_market {
         // Assert that the owner of this Noot is sending this tx
         assert!(noot::is_owner<T, Market>(tx_context::sender(ctx), &noot), ENOT_OWNER);
 
-        let transfer_cap = noot::extract_transfer_cap(Market {}, noot, ctx);
+        let transfer_cap = noot::extract_transfer_cap(Market {}, noot);
         let pay_to = tx_context::sender(ctx);
         create_sell_offer<C,T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
     }
