@@ -296,4 +296,19 @@ module noot::noot {
         let noot_data = dynamic_object_field::borrow_mut<vector<u8>, NootData<T, D>>(&mut noot.id, b"data");
         (&mut noot_data.display, &mut noot_data.body)
     }
+
+    // === Inventory Accessors ===
+
+    struct Key<phantom I> has store, copy, drop {
+        inner: vector<u8>
+    }
+
+    public fun add_inventory<T, M, Namespace: drop, Value: store>(
+        witness: Namespace,
+        noot: &mut Noot<T, M>,
+        key: vector<u8>,
+        value: Value
+    ) {
+        inventory::add<I>(witness, &mut noot.id, key, value);
+    }
 }

@@ -60,6 +60,8 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Test to see how `vector<u8>` looks within an explorer; is it human readable? Should we use strings instead?
+- Check how stored dynamic fields look on-chain in the explorer; can you still find them?
 - Create-family should start off with passing a vector-map
 - Inventory-adding functions
 - Stackable noots
@@ -123,3 +125,21 @@ Suppose you want to have composable noots, like you have 5 noots that combine in
 
 - Should noot.data_id be optional? Would we want to create a noot which DOESN'T have corresponding data? In that case it would be impossible to display it; it would be kind of an incomplete Noot.
 -
+
+### Aptos Token Standard:
+
+- Is 1,400 lines long, complex, and redundant. Property maps is another 250. And this is just for the base standard; it doesn't include markets, auctions, or launchpads. The scope is small; just creating a collection, creating a token, modifying collection or token data, and transferring tokens; that's it. It took them 1,750 lines of code to specify that.
+- overfits for the pfp-collection use case, and doesn't really work for much else; i.e., has a 'max supply', and 'royalty' field built in at the base-level.
+- Has runtime mutability configuration checking, which makes editing fields depends upon fetching a global resource and checking it every time.
+- Has no on-chain metadata; instead its simply linked to using a URI. TokenData is just royalty information, name, and uri.
+- Transfers require two signatures (sender and receiver) or for the receiver to 'open up' their store by turning on 'opt in transfers'
+- All token-data is stored within a table; updating a user's tokendata requires fetching that data and editing its rows. (Fortunately Aptos can parallelize table reads and writes.) This means data cannot be ported or moved around like an object; for example, you can't remove your data from a collection's store and then lock it with another module which now has the rights to update it.
+- Royalty is not actually used in any of their example contract. Royalties are optional and not enforced. They are easy to bypass; it's up to the implementing market to respect them.
+
+### Inventory:
+
+- Note that we use dynamic_field, rather than dynamic_object_field, to keep our inventory as flexible as possible. The dynamic_object_field would require all stored objects to have key, and we don't want to impose this constraint.
+
+The only advantage dynamic_object_field conveys is that it's possible to find the child-objects in a Sui blockchain explorer still; i.e., if you lookup their key-id, you'll be able to see the object. Whereas with dynamic_field, if you lookup the object's key-id, it'll say the object has been wrapped or deleted.
+
+**FUTURE:** Perhaps this can be worked-around by the Sui explorer in the future, or perhaps dynamic_field can be made more general such that it behaves like dynamic_object_field whenever possible (when a value has 'key'). This would simplify the developer's API, since they would use one module / one set of functions, rather than two.
