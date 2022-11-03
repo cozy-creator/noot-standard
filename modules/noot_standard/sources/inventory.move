@@ -47,12 +47,17 @@ module noot::inventory {
         id: UID,
     }
 
+    struct Index<phantom Namespace: drop> has key, store {
+        id: UID,
+        inner: vector<Key<Namespace>>
+    }
+
     struct Key<phantom Namespace: drop> has store, copy, drop {
         raw_key: vector<u8>
     }
     
     // this is a reserved key, to prevent name-collisions with Key
-    struct Index<phantom Namespace: drop> has store, copy, drop {}
+    struct IndexKey<phantom Namespace: drop> has store, copy, drop {}
 
     public fun empty(ctx: &mut TxContext): Inventory {
         Inventory { id: object::new(ctx) }
@@ -121,7 +126,7 @@ module noot::inventory {
     ): bool {
         if (!index_exists<Namespace>(inventory)) { return false };
 
-        let index = dynamic_field::borrow<Index<Namespace>, vector<Key<Namespace>>>(&inventory.id, Index<Namespace> {});
+        let index = dynamic_field::borrow<IndexKey<Namespace>, vector<Key<Namespace>>>(&inventory.id, IndexKey<Namespace> {});
         vector::contains(index, &Key<Namespace> { raw_key })
     }
 
@@ -138,7 +143,7 @@ module noot::inventory {
     public fun length<Namespace: drop>(inventory: &Inventory): u64 {
         if (!index_exists<Namespace>(inventory)) { return 0 };
 
-        let index = dynamic_field::borrow<Index<Namespace>, vector<Key<Namespace>>>(&inventory.id, Index<Namespace> {});
+        let index = dynamic_field::borrow<IndexKey<Namespace>, vector<Key<Namespace>>>(&inventory.id, IndexKey<Namespace> {});
         vector::length(index)
     }
 
@@ -151,7 +156,7 @@ module noot::inventory {
         let raw_index = vector::empty<vector<u8>>();
 
         if (index_exists<Namespace>(inventory)) { 
-            let index = dynamic_field::borrow<Index<Namespace>, vector<Key<Namespace>>>(&inventory.id, Index<Namespace> {});
+            let index = dynamic_field::borrow<IndexKey<Namespace>, vector<Key<Namespace>>>(&inventory.id, IndexKey<Namespace> {});
             let i = 0;
 
             while (i < vector::length(index)) {
@@ -176,7 +181,7 @@ module noot::inventory {
         let new_inventory = empty(ctx);
 
         if (index_exists<Namespace>(inventory)) {
-            let index = dynamic_field::remove<Index<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, Index<Namespace> {});
+            let index = dynamic_field::remove<IndexKey<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, IndexKey<Namespace> {});
 
             let i = 0;
 
@@ -199,7 +204,7 @@ module noot::inventory {
         inventory: Inventory
     ) {
         if (index_exists<Namespace>(&inventory)) {
-            let index = dynamic_field::remove<Index<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, Index<Namespace> {});
+            let index = dynamic_field::remove<IndexKey<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, IndexKey<Namespace> {});
 
             let i = 0;
 
@@ -238,13 +243,13 @@ module noot::inventory {
     // Ensures that an index always exists for the given namespace
     fun borrow_index_mut_internal<Namespace: drop>(inventory: &mut Inventory): &mut vector<Key<Namespace>> {
         if (!index_exists<Namespace>(inventory)) {
-            dynamic_field::add(&mut inventory.id, Index<Namespace> {}, vector::empty<Key<Namespace>>());
+            dynamic_field::add(&mut inventory.id, IndexKey<Namespace> {}, vector::empty<Key<Namespace>>());
         };
-        dynamic_field::borrow_mut<Index<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, Index<Namespace> {})
+        dynamic_field::borrow_mut<IndexKey<Namespace>, vector<Key<Namespace>>>(&mut inventory.id, IndexKey<Namespace> {})
     }
 
     fun index_exists<Namespace: drop>(inventory: &Inventory): bool {
-        dynamic_field::exists_with_type<Index<Namespace>, Key<Namespace>>(&inventory.id, Index<Namespace> {})
+        dynamic_field::exists_with_type<IndexKey<Namespace>, Key<Namespace>>(&inventory.id, IndexKey<Namespace> {})
     }
 
     // This is not possible yet

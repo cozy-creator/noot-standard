@@ -4,10 +4,8 @@ module noot::noot {
     use sui::tx_context::{Self, TxContext};
     use sui::transfer;
     use sui::vec_map::{Self, VecMap};
-    use sui::dynamic_object_field;
     use sui::dynamic_field;
-    use std::string::{Self, String};
-    use std::vector;
+    use std::string::{String};
     use noot::inventory::{Self, Inventory};
 
     const EBAD_WITNESS: u64 = 0;
@@ -401,7 +399,4 @@ module noot::noot {
     public fun is_correct_transfer_cap<T, M>(noot: &Noot<T, M>, transfer_cap: &TransferCap<T, M>): bool {
         transfer_cap.for == object::id(noot)
     }
-
-    // TO DO: consider adding methods to deposit or remove noots specifically, and
-    // set their owner to option::none when that happens
 }
