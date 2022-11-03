@@ -5,30 +5,36 @@ module noot_examples::minecraft {
     use sui::tx_context::{Self, TxContext};
     use sui::object::{Self, UID, ID};
     use sui::transfer;
+    use sui::dynamic_object_field;
+    use sui::dynamic_field;
+    use sui::vec_map;
     use noot::noot::{Self, Noot, NootData, NootFamilyData};
     use noot::royalty_market::Market;
     use std::string::{Self, String};
-    use sui::dynamic_object_field;
-    use sui::vec_map;
 
     const ENOT_SERVER_ADMIN: u64 = 1;
+
+    // Move does not have yet enums
+    // enum for specific ithings in inventory
+    const WOODEN_SWORD: vector<u8> = b"wooden_sword";
+    const DIAMOND_SWORD: vector<u8> = b"diamond_sword";
+    const PLANK: vector<u8> = b"plank";
+    const STICK: vector<u8> = b"stick";
+    const DIAMOND: vector<u8> = b"diamond";
+
+    // enum for data-types (categories)
+    const CONSTRUCTION: vector<u8> = b"construction";
+    const EQUIPMENT: vector<u8> = b"equipment";
+    const ITEM: vector<u8> = b"item";
 
     // One-time witness
     struct MINECRAFT has drop {}
 
-    // witness
+    // noot-family witness
     struct Minecraft has drop {}
 
-    struct Server has key {
+    struct GameConfig has key {
         id: UID
-    }
-
-    struct Wood {}
-
-    // Has the right to issue resources from the server
-    struct ServerCap has key {
-        id: UID,
-        for: ID
     }
 
     // Has the right to generate servers
@@ -36,19 +42,27 @@ module noot_examples::minecraft {
         id: UID
     }
 
-    struct WorldResource has key, store {
+    // Has the right to issue resources from the server
+    struct ServerCap has key {
+        id: UID,
+        for: ID
+    }
+
+    struct World has key {
         id: UID,
         name: String,
+        seed: u64
+    }
+
+    struct WorldResource has store {
         amount: u64
     }
 
-    struct GameConfig has key {
-        id: UID
-    }
+    struct EquipmentData has store, copy, drop { durability: u64 }
+    
+    struct ItemData has store, copy, drop { }
 
-    struct WoodData has store, copy, drop {
-        durability_remaining: u64
-    }
+    struct ConstructionData has store, copy, drop { }
 
     fun init(one_time_witness: MINECRAFT, ctx: &mut TxContext) {
         let majong = MajongStudiosCap { id: object::new(ctx) };
@@ -58,95 +72,151 @@ module noot_examples::minecraft {
         let family_display = noot::borrow_family_data_mut(Minecraft {}, &mut noot_family);
         vec_map::insert(family_display, string::utf8(b"name"), string::utf8(b"Minecraft"));
 
-        // First wood type
+        // This is WAY too clunky of a way to store data; consider this just an illustrative
+        // placeholder until I come up with something better.
+
+        // Wooden Sword
         let display = vec_map::empty();
-        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"oak"));
+        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"Wooden Sword"));
+        vec_map::insert(&mut display, string::utf8(b"https:png"), string::utf8(b"https://hosting.com/1234.png"));
         noot::add_family_data(Minecraft {}, 
             &mut noot_family, 
-            b"oak_data",
+            WOODEN_SWORD,
             display, 
-            WoodData { durability_remaining: 100 }, 
+            EquipmentData{ durability: 59 }, 
             ctx);
         
-        // Second wood type
+        // Diamond Sword
         let display = vec_map::empty();
-        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"spruce"));
+        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"Diamond Sword"));
+        vec_map::insert(&mut display, string::utf8(b"https:png"), string::utf8(b"https://hosting.com/1234.png"));
         noot::add_family_data(Minecraft {}, 
             &mut noot_family, 
-            b"spruce_data",
+            DIAMOND_SWORD,
             display, 
-            WoodData { durability_remaining: 70 }, 
+            EquipmentData{ durability: 1561 }, 
             ctx);
 
+        // Stick
+        let display = vec_map::empty();
+        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"Stick"));
+        vec_map::insert(&mut display, string::utf8(b"https:png"), string::utf8(b"https://hosting.com/1234.png"));
+        noot::add_family_data(Minecraft {}, 
+            &mut noot_family, 
+            STICK,
+            display, 
+            ItemData{ }, 
+            ctx);
+        
+        // Diamond 
+        let display = vec_map::empty();
+        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"Diamond"));
+        vec_map::insert(&mut display, string::utf8(b"https:png"), string::utf8(b"https://hosting.com/1234.png"));
+        noot::add_family_data(Minecraft {}, 
+            &mut noot_family, 
+            DIAMOND,
+            display, 
+            ItemData{ }, 
+            ctx);
+
+        // Plank
+        let display = vec_map::empty();
+        vec_map::insert(&mut display, string::utf8(b"name"), string::utf8(b"Plank"));
+        vec_map::insert(&mut display, string::utf8(b"https:png"), string::utf8(b"https://hosting.com/1234.png"));
+        noot::add_family_data(Minecraft {}, 
+            &mut noot_family, 
+            PLANK,
+            display, 
+            ConstructionData{ }, 
+            ctx);
+        
         transfer::freeze_object(noot_family);
     }
 
-    // Only Majong can create a server on behalf of an owner
+    // Majong generates a server and grants its server_admin priviliges to a machine, not
+    // the end-user. The end-user interacts with the server, and the server updates the
+    // game-state saved on-chain by posting transactions.
     public fun create_server(_majong: &MajongStudiosCap, owner: address, ctx: &mut TxContext) {
         let server_uid = object::new(ctx);
         let server_id = object::uid_to_inner(&server_uid);
-        let server = Server { id: server_uid };
-
-        let key = string::utf8(b"oak");
-        dynamic_object_field::add(&mut server.id, key, WorldResource {
-            id: object::new(ctx),
-            name: key,
-            amount: 64
-        });
-
-        let key = string::utf8(b"spruce");
-        dynamic_object_field::add(&mut server.id, key, WorldResource {
-            id: object::new(ctx),
-            name: key,
-            amount: 64
-        });
-
+        let server = World { id: server_uid, name: string::utf8(b"Bedrock"), seed: 0};
         let server_admin = ServerCap { id: object::new(ctx), for: server_id };
+
+        // Create the world resources
+        dynamic_field::add(&mut server.id, b"plank", WorldResource { amount: 500 });
+        dynamic_field::add(&mut server.id, b"stick", WorldResource { amount: 100 });
+        dynamic_field::add(&mut server.id, b"diamond", WorldResource { amount: 7 });
 
         transfer::share_object(server);
         transfer::transfer(server_admin, owner);
     }
 
-    // Only the server can generate wood and give it a player
-    public entry fun craft_wood(
+    // Only the server can generate resources
+    public entry fun generate_resource(
         server_admin: &ServerCap,
-        server: &mut Server,
+        server: &mut World,
+        key: vector<u8>,
         amount: u64,
         family_data: &NootFamilyData<Minecraft>,
         for: address,
         ctx: &mut TxContext)
     {
         assert!(is_correct_server_cap(server_admin, server), ENOT_SERVER_ADMIN);
-        let spruce_resource = dynamic_object_field::borrow_mut<String, WorldResource>(&mut server.id, string::utf8(b"oak"));
+        let resource = dynamic_field::borrow_mut<vector<u8>, WorldResource>(&mut server.id, key);
 
-        // Will abort if amount > spruce_resource.amount remaining
-        spruce_resource.amount = spruce_resource.amount - amount;
+        // Will abort if amount > resource.amount remaining
+        resource.amount = resource.amount - amount;
 
-        let oak_data_ref = noot::borrow_family_data(family_data, b"oak");
+        let type = key_to_type(key);
 
-        noot::craft_<Minecraft, Market, WoodData>(Minecraft {}, for, oak_data_ref, ctx);
-    }
-
-    // Only a user can damage their own wood
-    public entry fun damage_wood(
-        wood: Noot<Minecraft, Market>,
-        game_config: &GameConfig,
-        damage: u64,
-        ctx: &mut TxContext)
-    {
-        let default_data = dynamic_object_field::borrow<vector<u8>, NootData<Minecraft, WoodData>>(&game_config.id, b"spruce_data");
-        let (_display, body) = noot::borrow_data_mut(&mut wood, default_data, ctx);
-
-        // destroy wood
-        if (damage >= body.durability_remaining) {
-            noot::deconstruct(Minecraft {}, wood);
+        // This also transfers the noot to the new owner 'for'
+        if (type == EQUIPMENT) {
+            let data_ref = noot::borrow_family_data(family_data, key);
+            noot::craft_<Minecraft, Market, EquipmentData>(Minecraft {}, for, data_ref, ctx);
+        } else if (type == CONSTRUCTION) {
+            let data_ref = noot::borrow_family_data(family_data, key);
+            noot::craft_<Minecraft, Market, ConstructionData>(Minecraft {}, for, data_ref, ctx);
         } else {
-            body.durability_remaining = body.durability_remaining - damage;
-            transfer::transfer(wood, tx_context::sender(ctx));
+            let data_ref = noot::borrow_family_data(family_data, key);
+            noot::craft_<Minecraft, Market, ItemData>(Minecraft {}, for, data_ref, ctx);
         };
     }
 
-    public fun is_correct_server_cap(server_admin: &ServerCap, server: &Server): bool {
+    // Helper function
+    public fun key_to_type(key: vector<u8>): vector<u8> {
+        if (key == WOODEN_SWORD || key == DIAMOND_SWORD) {
+            EQUIPMENT
+        } else if (key == PLANK) {
+            CONSTRUCTION
+        } else {
+            ITEM
+        }
+    }
+
+    public entry fun craft_sword() {
+
+    }
+
+    public fun damage_sword(
+        sword: Noot<Minecraft, Market>,
+        game_config: &GameConfig,
+        damage: u64,
+        ctx: &mut TxContext
+    ) {
+        let default_data = dynamic_object_field::borrow<vector<u8>, NootData<Minecraft, EquipmentData>>(&game_config.id, b"spruce_data");
+        let (_display, body) = noot::borrow_data_mut(&mut sword, default_data, ctx);
+
+        // destroy wood
+        if (damage >= body.durability) {
+            let inventory = noot::deconstruct(Minecraft {}, sword);
+            transfer::transfer(inventory, tx_context::sender(ctx));
+        } else {
+            body.durability = body.durability - damage;
+            transfer::transfer(sword, tx_context::sender(ctx));
+        };
+    }
+
+    public fun is_correct_server_cap(server_admin: &ServerCap, server: &World): bool {
         (server_admin.for == object::uid_to_inner(&server.id))
     }
 }

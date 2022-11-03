@@ -7,6 +7,7 @@ module noot::noot {
     use sui::dynamic_object_field;
     use std::string::{Self, String};
     use std::vector;
+    use noot::inventory::{Self, Inventory};
 
     const EBAD_WITNESS: u64 = 0;
     const ENOT_OWNER: u64 = 1;
@@ -16,16 +17,24 @@ module noot::noot {
     const EINSUFFICIENT_FUNDS: u64 = 5;
     const EINCORRECT_DATA_REFERENCE: u64 = 6;
 
-    // T is a witness produced by the defining-module, such as 'Minecraft' or 'Outlaw_Sky'
-    // M is a witness produced by the market-module, which defines how the noot may be transferred
+    // Move does not yet support enums
+    const DATA_KEY: vector<u8> = b"data";
+
+    // T is the noot-family; a witness struct produced by the module creating the family, such as 
+    // 'Minecraft' or 'Outlaw_Sky'
+    // M is a witnes struct produced by the market-module, which defines how the noot may be transferred
+    // Note that Noots must have 'store', otherwise they cannot be added to another noots inventory.
+    // Unfortunately, this also enables polymorphic transfer on noots; however polymorphic transfer
+    // simply changes the writer (Sui-defined owner) and does not change noot.owner (the module-defined
+    // owner).
+    // When Noots are stored in an inventory, their owner becomes option::none
     struct Noot<phantom T, phantom M> has key, store {
         id: UID,
-        quantity: u64,
         owner: option::Option<address>,
+        quantity: u64,
         transfer_cap: option::Option<TransferCap<T, M>>,
-        default_data_key: vector<u8>,
-        // TO DO: after Sui natively supports the ability to enumerate children, remove this field
-        child_index: vector<vector<u8>>
+        family_key: vector<u8>,
+        inventory: Inventory
     }
 
     // TODO: Replace VecMap with a more efficient data structure once one becomes a available within Sui
@@ -40,15 +49,19 @@ module noot::noot {
         body: D
     }
 
-    struct TransferCap<phantom T, phantom M> has store {
-        for: ID
-    }
-
-    // One one of these will exist per noot-type, and they will initially be owned by the type creator
-    // They will contain dynamic fields indexed by default_data_key, giving noots default data
-    struct NootFamilyData<phantom T> has key, store {
+    // Only one of these will exist per noot family T, and a module can only create one noot family.
+    // Every noot family consists of 'members', which can have arbitrary data-types D. 
+    // The FamilyConfig acts as a template, specifying the default display and default data for each
+    // noot family member.
+    // The NootFamilyConfig also stores its own 'display', which can specify various information (name,
+    // website, description) about the family as a whole.
+    struct NootFamilyConfig<phantom T> has key, store {
         id: UID,
         display: VecMap<String, String>
+    }
+
+    struct TransferCap<phantom T, phantom M> has store {
+        for: ID
     }
 
     // === Events ===
@@ -67,14 +80,13 @@ module noot::noot {
         one_time_witness: W,
         _type_witness: T,
         ctx: &mut TxContext
-    ): NootFamilyData<T> {
+    ): NootFamilyConfig<T> {
         assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
 
         // TODO: add events
-        // event::emit(CollectionCreated<T> {
-        // });
+        // event::emit(CollectionCreated<T> {});
 
-        NootFamilyData<T> {
+        NootFamilyConfig<T> {
             id: object::new(ctx),
             display: vec_map::empty<String, String>()
         }
@@ -83,32 +95,41 @@ module noot::noot {
     public entry fun craft_<T: drop, M: drop, D: store + copy + drop>(
         witness: T, 
         send_to: address, 
-        data: &NootData<T, D>,
+        data: Option<NootData<T, D>>,
         ctx: &mut TxContext) 
     {
-        let noot = craft<T, M, D>(witness, option::some(send_to), data, ctx);
+        let noot = craft<T, M, D>(witness, option::some(send_to), 1, b"something", data, ctx);
         transfer::transfer(noot, send_to);
     }
 
     public fun craft<T: drop, M: drop, D: store + copy + drop>(
         _witness: T,
         owner: Option<address>,
-        data: &NootData<T, D>,
+        quantity: u64,
+        family_key: vector<u8>,
+        data_maybe: Option<NootData<T, D>>,
         ctx: &mut TxContext): Noot<T, M> 
     {
         let uid = object::new(ctx);
         let id = object::uid_to_inner(&uid);
 
-        Noot {
+        let noot = Noot {
             id: uid,
-            quantity: 1,
-            owner: owner,
+            owner,
+            quantity,
             transfer_cap: option::some(TransferCap<T, M> {
                 for: id
             }),
-            default_data_key: b"data",
-            child_index: vector::empty<vector<u8>>()
-        }
+            family_key,
+            inventory: inventory::empty(ctx)
+        };
+
+        if (option::is_some(&data_maybe)) {
+            let data = option::destroy_some(data_maybe);
+            dynamic_object_field::add(&mut noot.id, DATA_KEY, data);
+        } else { option::destroy_none(data_maybe) };
+
+        noot
     }
 
     public fun create_data<T: drop, D: store + copy + drop>(
@@ -124,17 +145,21 @@ module noot::noot {
         }
     }
 
-    // We do not currently allow noots missing their transfer caps to be deconstructed
-    // We only allow the defining-module to perform deconstruction
-    // Noots can be deconstructed by someone other than the owner
+    // Destroy the noot and return its inventory
     //
-    // TO DO: enumerate and return child objects
-    public fun deconstruct<T: drop, M>(_witness: T, noot: Noot<T, M>) {
+    // We do not currently allow noots missing their transfer caps to be deconstructed
+    // Only the defining-module to perform deconstruction, enforced here with a witness
+    //
+    // For flexibility, we allow noots to be deconstructed by someone other than the owner.
+    // Defining modules should check owner permissions prior to calling this function.
+    public fun deconstruct<T: drop, M>(_witness: T, noot: Noot<T, M>): Inventory {
         assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
 
-        let Noot { id, quantity: _, owner: _, transfer_cap, default_data_key: _, child_index: _ } = noot;
+        let Noot { id, owner: _, quantity: _, transfer_cap, family_key: _, inventory } = noot;
         let TransferCap { for: _ } = option::destroy_some(transfer_cap);
         object::delete(id);
+
+        inventory
     }
 
     // === Market Functions, for Noot marketplaces ===
@@ -171,6 +196,16 @@ module noot::noot {
 
     // === Transfers restricted to using the Transfer-Cap ===
 
+    // transfer_cap does not have key, so this cannot be used as an entry function
+    public fun transfer_with_cap<T: drop, M: drop>(
+        transfer_cap: &TransferCap<T, M>,
+        noot: &mut Noot<T, M>,
+        new_owner: address)
+    {
+        assert!(is_correct_transfer_cap(noot, transfer_cap), ENO_TRANSFER_PERMISSION);
+        noot.owner = option::some(new_owner);
+    }
+
     // TODO: when multi-writer objects can be deleted, this function should take noots by
     // value, destroy the shared object, and create it as a single-writer object.
     // Right now it will remain a multi-writer object
@@ -180,17 +215,7 @@ module noot::noot {
         transfer_cap: TransferCap<T, M>) 
     {
         transfer_with_cap(&transfer_cap, noot, new_owner);
-        option::fill(&mut noot.transfer_cap, transfer_cap);
-    }
-
-    // transfer_cap does not have key, so this cannot be used as an entry function
-    public fun transfer_with_cap<T: drop, M: drop>(
-        transfer_cap: &TransferCap<T, M>,
-        noot: &mut Noot<T, M>,
-        new_owner: address)
-    {
-        assert!(is_correct_transfer_cap(noot, transfer_cap), ENO_TRANSFER_PERMISSION);
-        noot.owner = option::some(new_owner);
+        fill_transfer_cap(noot, transfer_cap);
     }
 
     // === Transfers restricted to using a witness ===
@@ -217,35 +242,61 @@ module noot::noot {
         transfer::share_object(noot_data);
     }
 
-    // === FamilyData Functions ===
+    // === FamilyConfig Functions ===
 
-    // NootFamilyData does not have 'store', meaning that external modules cannot use the transfer::transfer
+    // NootFamilyConfig does not have 'store', meaning that external modules cannot use the transfer::transfer
     // polymorphic transfer in order to change ownership. As such this function is necessary
-    public entry fun transfer_family_data<T>(family_info: NootFamilyData<T>, send_to: address) {
-        transfer::transfer(family_info, send_to);
+    public entry fun transfer_family_config<T>(family_config: NootFamilyConfig<T>, send_to: address) {
+        transfer::transfer(family_config, send_to);
     }
 
-    public fun borrow_family_data_mut<T: drop>(_witness: T, family_data: &mut NootFamilyData<T>): &mut VecMap<String, String> {
-        &mut family_data.display
+    public fun borrow_family_display<T: drop>(family_config: &NootFamilyConfig<T>): &VecMap<String, String> {
+        &family_config.display
     }
 
-    public fun add_family_data<T: drop, D: store + copy + drop>(
+    public fun borrow_family_display_mut<T: drop>(_witness: T, family_config: &mut NootFamilyConfig<T>): &mut VecMap<String, String> {
+        &mut family_config.display
+    }
+
+    public fun add_family_member<T: drop, D: store + copy + drop>(
         witness: T, 
-        family_info: &mut NootFamilyData<T>, 
+        family_config: &mut NootFamilyConfig<T>, 
         key: vector<u8>,
         display: VecMap<String, String>,
         data: D,
         ctx: &mut TxContext)
     {
         let noot_data = create_data(witness, display, data, ctx);
-        dynamic_object_field::add(&mut family_info.id, key, noot_data)
+        dynamic_object_field::add(&mut family_config.id, key, noot_data)
     }
 
-    public fun borrow_family_data<T, D: store + copy + drop>(family_data: &NootFamilyData<T>, key: vector<u8>): &NootData<T, D> {
-        dynamic_object_field::borrow(&family_data.id, key)
+    public fun remove_family_member<T: drop, D: store + copy + drop>(
+        _witness: T, 
+        family_config: &mut NootFamilyConfig<T>, 
+        key: vector<u8>,
+    ): D {
+        let noot_data = dynamic_object_field::remove(&mut family_config.id, key);
+        let NootData<T, D> { id, display, body } = noot_data;
+        object::delete(id);
+        body
     }
 
-    // === Authority Checking Functions ===
+    public fun borrow_family_member<T: drop, D: store + copy + drop>(
+        family_config: &NootFamilyConfig<T>, 
+        key: vector<u8>,
+    ): &NootData<T, D> {
+        dynamic_object_field::borrow<vector<u8>, NootData<T, D>>(&family_config.id, key)
+    }
+
+    public fun borrow_family_member_mut<T: drop, D: store + copy + drop>(
+        _witness: T,
+        family_config: &mut NootFamilyConfig<T>, 
+        key: vector<u8>,
+    ): &mut NootData<T, D> {
+        dynamic_object_field::borrow_mut<vector<u8>, NootData<T, D>>(&mut family_config.id, key)
+    }
+
+    // === Authority Checkers ===
 
     public fun is_owner<T, M>(addr: address, noot: &Noot<T, M>): bool {
         if (option::is_some(&noot.owner)) {
@@ -263,52 +314,52 @@ module noot::noot {
         transfer_cap.for == object::id(noot)
     }
 
-    // === Data Accessors ===
+    // === NootData Accessors ===
 
-    public fun borrow_data<T, M, D: store + drop + copy>(
+    public fun borrow_data<T: drop, M, D: store + drop + copy>(
         noot: &Noot<T, M>,
-        default_data: &NootData<T, D>): (&VecMap<String, String>, &D)
-    {
-        if (dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, b"data")) {
-            let data = dynamic_object_field::borrow<vector<u8>, NootData<T, D>>(&noot.id, b"data");
-            (&data.display, &data.body)
+        family_config: &NootFamilyConfig<T>
+    ): &D {
+        if (dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, DATA_KEY)) {
+            let data = dynamic_object_field::borrow<vector<u8>, NootData<T, D>>(&noot.id, DATA_KEY);
+            &data.body
         } else {
-            assert!(is_correct_data(noot, default_data), EINCORRECT_DATA_REFERENCE);
-            (&default_data.display, &default_data.body)
+            let default_data = borrow_family_member(family_config, noot.family_key);
+            &default_data.body
         }
     }
 
-    public fun borrow_data_mut<T, M, D: store + drop + copy>(
+    // Only the Noot-defining module can borrow the data mutably
+    public fun borrow_data_mut<T: drop, M, D: store + drop + copy>(
+        _witness: T,
         noot: &mut Noot<T, M>,
-        default_data: &NootData<T, D>,
-        ctx: &mut TxContext): (&mut VecMap<String, String>, &mut D)
-    {
-        if (!dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, b"data")) {
-            assert!(is_correct_data(noot, default_data), EINCORRECT_DATA_REFERENCE);
+        family_config: &NootFamilyConfig<T>,
+        ctx: &mut TxContext
+    ): &mut D {
+        if (!dynamic_object_field::exists_with_type<vector<u8>, NootData<T, D>>(&noot.id, DATA_KEY)) {
+            let default_data = borrow_family_member<T, D>(family_config, noot.family_key);
             let data_copy = NootData<T, D> {
                 id: object::new(ctx),
                 display: *&default_data.display,
-                body: *&default_data.body    
+                body: *&default_data.body
             };
-            dynamic_object_field::add(&mut noot.id, b"data", data_copy);
+            dynamic_object_field::add(&mut noot.id, DATA_KEY, data_copy);
         };
 
-        let noot_data = dynamic_object_field::borrow_mut<vector<u8>, NootData<T, D>>(&mut noot.id, b"data");
-        (&mut noot_data.display, &mut noot_data.body)
+        let noot_data = dynamic_object_field::borrow_mut<vector<u8>, NootData<T, D>>(&mut noot.id, DATA_KEY);
+        &mut noot_data.body
     }
 
     // === Inventory Accessors ===
 
-    struct Key<phantom I> has store, copy, drop {
-        inner: vector<u8>
+    public fun borrow_inventory<T, M>(noot: &Noot<T, M>): &Inventory {
+        &noot.inventory
     }
 
-    public fun add_inventory<T, M, Namespace: drop, Value: store>(
-        witness: Namespace,
-        noot: &mut Noot<T, M>,
-        key: vector<u8>,
-        value: Value
-    ) {
-        inventory::add<I>(witness, &mut noot.id, key, value);
+    public fun borrow_inventory_mut<T, M>(noot: &mut Noot<T, M>): &mut Inventory {
+        &mut noot.inventory
     }
+
+    // TO DO: consider adding methods to deposit or remove noots specifically, and
+    // set their owner to option::none when that happens
 }

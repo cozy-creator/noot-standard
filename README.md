@@ -60,6 +60,8 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Consider wrapping the 'family data' return values with options, in case the data they want to borrow doesn't exist, or its the wrong type.
+- Remove `store` from Noots, and instead use an intermediary noot-store struct, along with special functions for storing and borrowing stored noots.
 - Test to see how `vector<u8>` looks within an explorer; is it human readable? Should we use strings instead?
 - Check how stored dynamic fields look on-chain in the explorer; can you still find them?
 - Create-family should start off with passing a vector-map
@@ -143,3 +145,9 @@ Suppose you want to have composable noots, like you have 5 noots that combine in
 The only advantage dynamic_object_field conveys is that it's possible to find the child-objects in a Sui blockchain explorer still; i.e., if you lookup their key-id, you'll be able to see the object. Whereas with dynamic_field, if you lookup the object's key-id, it'll say the object has been wrapped or deleted.
 
 **FUTURE:** Perhaps this can be worked-around by the Sui explorer in the future, or perhaps dynamic_field can be made more general such that it behaves like dynamic_object_field whenever possible (when a value has 'key'). This would simplify the developer's API, since they would use one module / one set of functions, rather than two.
+
+### Controversial Decisions:
+
+- In Inventory, we could relax the read constraints such that they no longer require witnesses. In that case any module could read any other module's namespace data (although it would still have to know what the corresponding types its reading were, which would require knowledge of that specific module). Currently, reads are protected by a module's witness.
+- Right now, Noots have key + store. This means they can be polymorphically transferred, which can result in an inconsistent state where the writer is not the owner. Presumably this is undesirable. Furthermore, I believe wrapping (storing) a Noot (outside of an inventory) is also undesirable, but incidentally allowed in this case. Ideally, we would store Noots using the dynamic_object_field, and not enable storing.
+- In order for transfer_cap to be useful, it's important that the Noot can be stored if and only if the transfer_cap is inside of the Noot (it's fully owned). Currently with store it's possible that a partially-owned Noot could be stored and inaccessible inside of another struct. This would render the transfer_cap as unusable, and would essentially enable 'stealing'.
