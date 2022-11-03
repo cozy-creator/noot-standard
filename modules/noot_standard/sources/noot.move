@@ -267,7 +267,7 @@ module noot::noot {
         transfer::transfer(noot, new_owner);
     }
 
-    // Should we allow the world, W, to do this as transfer as well?
+    // Should we allow the world module, W, to do this as transfer as well?
 
 
     // === FamilyConfig Functions ===
@@ -359,6 +359,29 @@ module noot::noot {
 
     public fun borrow_inventory_mut<T, M>(noot: &mut Noot<T, M>): &mut Inventory {
         &mut noot.inventory
+    }
+
+    // These are special accessors for storing noots inside of inventories, that make sure the owner
+    // field is correctly set. They can be bypassed as well obviously
+    public fun deposit_noot<W, M, Namespace: drop>(
+        witness: Namespace,
+        inventory: &mut Inventory,
+        raw_key: vector<u8>,
+        noot: Noot<W, M>
+    ) {
+        noot.owner = option::none();
+        inventory::add(witness, inventory, raw_key, noot);
+    }
+
+    public fun withdraw_noot<W, M, Namespace: drop>(
+        witness: Namespace,
+        inventory: &mut Inventory,
+        raw_key: vector<u8>,
+        new_owner: Option<address>
+    ): Noot<W, M> {
+        let noot = inventory::remove<Namespace, Noot<W, M>>(witness, inventory, raw_key);
+        noot.owner = new_owner;
+        noot
     }
 
     // === Authority Checkers ===
