@@ -60,6 +60,8 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Consider typing NootData with the world that it corresponds to
+- Should I switch inventory to dynamic_object_field instead?
 - Consider wrapping the 'family data' return values with options, in case the data they want to borrow doesn't exist, or its the wrong type.
 - Remove `store` from Noots, and instead use an intermediary noot-store struct, along with special functions for storing and borrowing stored noots.
 - Test to see how `vector<u8>` looks within an explorer; is it human readable? Should we use strings instead?
