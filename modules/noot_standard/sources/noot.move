@@ -29,7 +29,7 @@ module noot::noot {
     struct Noot<phantom World, phantom Market> has key, store {
         id: UID,
         owner: option::Option<address>,
-        quantity: u64,
+        quantity: u16,
         transfer_cap: option::Option<TransferCap<World, Market>>,
         family_key: vector<u8>,
         inventory: Inventory
@@ -109,7 +109,7 @@ module noot::noot {
     public entry fun craft_<T: drop, M: drop, D: store + copy + drop>(
         witness: T, 
         send_to: address,
-        quantity: u64,
+        quantity: u16,
         family_key: vector<u8>,
         data: Option<NootData<D>>,
         ctx: &mut TxContext) 
@@ -121,7 +121,7 @@ module noot::noot {
     public fun craft<T: drop, M: drop, D: store + copy + drop>(
         _witness: T,
         owner: Option<address>,
-        quantity: u64,
+        quantity: u16,
         family_key: vector<u8>,
         data_maybe: Option<NootData<D>>,
         ctx: &mut TxContext): Noot<T, M> 
@@ -235,18 +235,18 @@ module noot::noot {
     // as usual, albeit with an extra wrapping-function around it to get the proper reference
     public fun borrow_shared<W, M>(shared_wrapper: &SharedWrapper<W, M>, ctx: &TxContext): &Noot<W, M> {
         assert!(option::is_some(&shared_wrapper.noot), EEMPTY_SHARED_WRAPPER);
-        let noot = option::borrow(&shared_wrapper.noot);
+        let noot_ref = option::borrow(&shared_wrapper.noot);
 
-        assert!(is_owner(tx_context::sender(ctx), noot), ENOT_OWNER);
-        noot
+        assert!(is_owner(tx_context::sender(ctx), noot_ref), ENOT_OWNER);
+        noot_ref
     }
 
     public fun borrow_shared_mut<W, M>(shared_wrapper: &mut SharedWrapper<W, M>, ctx: &TxContext): &mut Noot<W, M> {
         assert!(option::is_some(&shared_wrapper.noot), EEMPTY_SHARED_WRAPPER);
-        let noot = option::borrow_mut(&mut shared_wrapper.noot);
+        let noot_ref = option::borrow_mut(&mut shared_wrapper.noot);
 
-        assert!(is_owner(tx_context::sender(ctx), noot), ENOT_OWNER);
-        noot
+        assert!(is_owner(tx_context::sender(ctx), noot_ref), ENOT_OWNER);
+        noot_ref
     }
 
     // === Transfers restricted to using a witness ===

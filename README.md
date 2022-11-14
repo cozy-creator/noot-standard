@@ -60,6 +60,9 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- For borrowing a noot from a shared wrapper, do we need to assert that the transaction-sender is the owner? Note that because 'noots' have store, a user can (1) polymorphic-transfer the noot to someone else, allowing them to get a reference to the noot, or even full possession of it, while not owning it, or (2) store the noot in a custom struct, share it, and then allow anyone to get a reference to it, or take it by value. That's why it's important function-creators check is_owner for a noot, although if they want lots of people to be able to write to it or read from it, they can.
+- Consider using 'economy' rather than 'market'
+- Add a separate 'gating mechanism' for the noot dispenser (white list, price adjustment, etc.)
 - Consider typing NootData with the world that it corresponds to
 - Should I switch inventory to dynamic_object_field instead?
 - Consider wrapping the 'family data' return values with options, in case the data they want to borrow doesn't exist, or its the wrong type.
@@ -153,3 +156,15 @@ The only advantage dynamic_object_field conveys is that it's possible to find th
 - In Inventory, we could relax the read constraints such that they no longer require witnesses. In that case any module could read any other module's namespace data (although it would still have to know what the corresponding types its reading were, which would require knowledge of that specific module). Currently, reads are protected by a module's witness.
 - Right now, Noots have key + store. This means they can be polymorphically transferred, which can result in an inconsistent state where the writer is not the owner. Presumably this is undesirable. Furthermore, I believe wrapping (storing) a Noot (outside of an inventory) is also undesirable, but incidentally allowed in this case. Ideally, we would store Noots using the dynamic_object_field, and not enable storing.
 - In order for transfer_cap to be useful, it's important that the Noot can be stored if and only if the transfer_cap is inside of the Noot (it's fully owned). Currently with store it's possible that a partially-owned Noot could be stored and inaccessible inside of another struct. This would render the transfer_cap as unusable, and would essentially enable 'stealing'.
+
+### Indexing:
+
+- Find noots by owner
+- Find noots by world
+- Find noot sell-offer by world
+
+### Other Stuff
+
+- Make sure multiple people can have update authority
+- Study ERC-721, 1155, Solana MetaData programs
+- Consider changing name of 'owner' to 'user'
