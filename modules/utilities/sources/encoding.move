@@ -1,6 +1,6 @@
 // General purpose functions for converting data types
 
-module noot::encode {
+module utils::encode {
     use sui::vec_map::{Self, VecMap};
     use std::string::{Self, String};
     use std::vector;

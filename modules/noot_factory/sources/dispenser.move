@@ -1,4 +1,4 @@
-module noot::dispenser {
+module factory::dispenser {
     use sui::object::{UID, ID};
     use sui::vec_map::VecMap;
     use sui::tx_context::{Self, TxContext};

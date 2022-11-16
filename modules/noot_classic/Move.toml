@@ -1,10 +1,12 @@
 [package]
-name = "SuiUtils"
-version = "0.0.1"
+name = "NootStandardClassic"
+version = "0.1.0"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework", rev = "devnet" }
+NootStandard = { local = "../noot_standard" }
 
 [addresses]
-utils = "0x0"
+noot_classic =  "0x0"
 sui = "0x2"
+noot = "0x3"

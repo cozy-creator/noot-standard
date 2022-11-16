@@ -1,7 +1,7 @@
 // These convenience functions will eventually be added to the sui::coin module
 // For now I'm keeping them here
 
-module noot::coin2 {
+module utils::coin2 {
     use sui::coin::{Self, Coin};
     use sui::balance::{Self, Balance};
     use sui::tx_context::{Self, TxContext};

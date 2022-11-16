@@ -1,4 +1,12 @@
-module noot::noot {
+// This is an older version of the noot standard, which I'm keeping for historical purposes.
+
+// Noot classic is based around noots being key + share, and not being wrapped by an EntryNoot
+// The 'owner' field is embedded into the noot itself, rather than the EntryNoot wrapper
+
+// Removing EntryNoot from the module makes usage simpler, but there are many downsides to this
+// setup as well.
+
+module noot_classic::noot {
     use sui::object::{Self, ID, UID};
     use std::option::{Self, Option};
     use sui::tx_context::{Self, TxContext};
@@ -15,67 +23,68 @@ module noot::noot {
     const ETRANSFER_CAP_ALREADY_EXISTS: u64 = 4;
     const EINSUFFICIENT_FUNDS: u64 = 5;
     const EINCORRECT_DATA_REFERENCE: u64 = 6;
-    const EEMPTY_ENTRY_NOOT: u64 = 7;
+    const EEMPTY_SHARED_WRAPPER: u64 = 7;
 
     // World is the world from which the noot originates; its native world. This is a witness struct that can be
     // produced only by the module that created the world, such as 'Minecraft' or 'Outlaw_Sky'.
-    // M is a witness struct produced by the market-module, which defines how the noot may be transferred.
-    //
-    // Noots have key + store so that they can be stored inside of a dynamic object field, and so they have a
-    // unique, stable id which can be tracked for indexing purposes.
-    //
-    // Noots are never allowed to be 'naked', or stored at the root level. They can only ever be wrapped inside of
-    // an EntryNoot, or stored in a dynamic object field inventory.
+    // M is a witness struct produced by the market-module, which defines how the noot may be transferred
+    // Note that Noots must have 'store', otherwise they cannot be added to another noot's inventory, or
+    // wrapped inside of a SharedWrapper.
+    // Unfortunately, this also enables polymorphic transfer on noots; however polymorphic transfer
+    // simply changes the writer (Sui-defined owner) and does not change noot.owner (the module-defined
+    // owner), which is what really matters.
+    // When Noots are stored in an inventory, their owner becomes option::none
     struct Noot<phantom World, phantom Market> has key, store {
         id: UID,
+        owner: option::Option<address>,
         quantity: u16,
-        type_id: vector<u8>,
-        transfer_cap: Option<TransferCap<World, Market>>,
+        transfer_cap: option::Option<TransferCap<World, Market>>,
+        family_key: vector<u8>,
         inventory: Inventory
     }
 
-    // An EntryNoot can never be stored; it's always a root-level object. This gives the noot module strong control
-    // over it. An EntryNoot can be in either single-writer or shared modes. The noot must be unwrapped and re-wrapped
-    // when switching between single-writer and shared modes.
-    struct EntryNoot<phantom World, phantom Market> has key {
-        id: UID,
-        owner: Option<address>,
-        noot: Option<Noot<World, Market>>
-    }
-
-    // VecMap is not a real map; it has O(N) lookup time. However this is more efficient than actual map up until
-    // about 100 items.
-    // We choose not to include a World type here, so that data can be copied between worlds
+    // TODO: Replace VecMap with a more efficient data structure once one becomes a available within Sui
+    // VecMap only has O(N) lookup time, which is better than an actual map up until about 100 items.
+    //
+    // These are always stored inside another struct, never left alone outside.
+    // Stored Object
+    // Should this be typed by World as well?
     struct NootData<Data: store + copy + drop> has store, copy, drop {
         display: VecMap<String, String>,
         body: Data
     }
 
-    // Only one WorldConfig object may exist per World. A module can only create one World.
-    // Every World consists of 'noot types', specified by their noot.type_id.
-    // The WorldConfig acts as a template, specifying the default display and data for each noot type.
-    // Each noot type can have arbitrary data.
+    // Only one of these will exist per noot family T, and a module can only create one noot family.
+    // Every noot family consists of 'members', which can have arbitrary data-types D. 
+    // The FamilyConfig acts as a template, specifying the default display and default data for each
+    // noot family member.
     // The WorldConfig also stores its own 'display', which can specify various information (name,
-    // website, description) about the World as a whole.
-    // Can be owned, shared, frozen, or stored. Can never be deleted.
+    // website, description) about the family as a whole.
+    // Can be owned, shared, frozen, or stored. Cannot be deleted.
     // Because of this, the owner can arbitrarily do whatever it wants using sui::transfer
     struct WorldConfig<phantom World> has key, store {
         id: UID,
         display: VecMap<String, String>
     }
 
-    // Does this need a World type? We include it anyway, for security
+    // Does this need a World type?
     struct TransferCap<phantom World, phantom Market> has key, store {
         id: UID,
         for: ID
     }
 
-    // Reserved key, namespaced by World, to avoid collisions
+    // Reserved key, spaced by world, to avoid collisions
     struct DataKey<phantom World> has store, copy, drop {}
 
-    // Wraps noot.type_id and adds a world for namespacing, which prevents key-collisions between worlds.
+    // wraps family_key and adds a world-namespace (a witness type). This prevents key-collisions
     struct Key<phantom World> has store, copy, drop { 
         raw_key: vector<u8>
+    }
+
+    // Shared object
+    struct SharedWrapper<phantom F, phantom M> has key {
+        id: UID,
+        noot: Option<Noot<F, M>>
     }
 
     // === Events ===
@@ -89,47 +98,64 @@ module noot::noot {
 
     // Can only be called with a `one-time-witness` type, ensuring that there will only ever be one WorldConfig
     // per `Family`.
-    public fun create_world<WORLD_GENESIS: drop, World: drop>(
-        one_time_witness: WORLD_GENESIS,
-        _witness: World,
+    public fun create_world<W: drop, F: drop>(
+        one_time_witness: W,
+        _native_family: F,
         ctx: &mut TxContext
-    ): WorldConfig<World> {
+    ): WorldConfig<F> {
         assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
 
         // TODO: add events
         // event::emit(CollectionCreated<T> {});
 
-        WorldConfig<World> {
+        WorldConfig<F> {
             id: object::new(ctx),
             display: vec_map::empty<String, String>()
         }
     }
 
-    public fun craft<W: drop, M: drop, D: store + copy + drop>(
-        _witness: W,
+    public fun craft_<T: drop, M: drop, D: store + copy + drop>(
+        witness: T, 
+        send_to: address,
+        quantity: u16,
+        family_key: vector<u8>,
+        data: Option<NootData<D>>,
+        ctx: &mut TxContext) 
+    {
+        let noot = craft<T, M, D>(witness, option::some(send_to), quantity, family_key, data, ctx);
+        transfer::transfer(noot, send_to);
+    }
+
+    public fun craft<T: drop, M: drop, D: store + copy + drop>(
+        _witness: T,
         owner: Option<address>,
         quantity: u16,
-        type_id: vector<u8>,
+        family_key: vector<u8>,
         data_maybe: Option<NootData<D>>,
-        ctx: &mut TxContext): EntryNoot<W, M> 
+        ctx: &mut TxContext): Noot<T, M> 
     {
         let uid = object::new(ctx);
         let id = object::uid_to_inner(&uid);
 
         let noot = Noot {
             id: uid,
+            owner,
             quantity,
-            type_id,
-            transfer_cap: option::some(TransferCap<W, M> { id: object::new(ctx), for: id }),
+            transfer_cap: option::some(TransferCap<T, M> { id: object::new(ctx), for: id }),
+            family_key,
             inventory: inventory::empty(ctx)
         };
 
         if (option::is_some(&data_maybe)) {
             let data = option::destroy_some(data_maybe);
-            dynamic_field::add(&mut noot.id, DataKey<W> {}, data);
+            dynamic_field::add(&mut noot.id, DataKey<T> {}, data);
         } else { option::destroy_none(data_maybe) };
 
-        EntryNoot { id: object::new(ctx), owner, noot: option::some(noot) }
+        noot
+    }
+
+    public fun create_data<D: store + copy + drop>(display: VecMap<String, String>, body: D): NootData<D> {
+        NootData { display, body }
     }
 
     // Destroy the noot and return its inventory
@@ -141,25 +167,16 @@ module noot::noot {
     // Defining modules should check owner permissions prior to calling this function.
     //
     // Note that all attached data will be lost unless it was copied prior to this
-    //
-    // In the future, when it's possible to delete shared objects this will fully consume the
-    // EntryNoot and destroy it as well. Here we assume the EntryNoot is shared, and simply leave it empty
-    // forever.
-    public fun deconstruct<W: drop, M>(_witness: W, entry_noot: &mut EntryNoot<W, M>): Inventory {
-        let noot = option::extract(&mut entry_noot.noot);
+    public fun deconstruct<T: drop, M>(_witness: T, noot: Noot<T, M>): Inventory {
         assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
 
-        let Noot { id, quantity: _, transfer_cap, type_id: _, inventory } = noot;
+        let Noot { id, owner: _, quantity: _, transfer_cap, family_key: _, inventory } = noot;
         object::delete(id);
 
         let TransferCap { id, for: _ } = option::destroy_some(transfer_cap);
         object::delete(id);
 
         inventory
-    }
-
-    public fun create_data<D: store + copy + drop>(display: VecMap<String, String>, body: D): NootData<D> {
-        NootData { display, body }
     }
 
     // === Market Functions, for Noot marketplaces ===
@@ -172,40 +189,43 @@ module noot::noot {
     // otherwise it could allow theft. We do not check here, to allow for the market to define
     // it's own permissioning-system
     // assert!(is_owner(tx_context::sender(ctx), &noot), ENOT_OWNER);
-    public fun extract_transfer_cap<W: drop, M: drop>(
+    public fun extract_transfer_cap<T: drop, M: drop>(
         _witness: M, 
-        entry_noot: &mut EntryNoot<W, M>,
+        noot: Noot<T, M>,
         ctx: &mut TxContext
-    ): TransferCap<W, M> {
-        let noot = option::borrow_mut(&mut entry_noot.noot);
-        assert!(is_fully_owned(noot), ENO_TRANSFER_PERMISSION);
-        option::extract(&mut noot.transfer_cap)
+    ): TransferCap<T, M> {
+        assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
 
-        // TO DO: check if the EntryNoot is shared, and if it's not, share it
-        // We'll have to consume the EntryNoot to share it
-        // The EntryNoot MUST be shared while the transfer_cap is missing
+        let transfer_cap = option::extract(&mut noot.transfer_cap);
+        let shared_wrapper = SharedWrapper {
+            id: object::new(ctx),
+            noot: option::some(noot)
+        };
+        transfer::share_object(shared_wrapper);
+
+        transfer_cap
     }
 
     // === Transfers restricted to using the Transfer-Cap ===
 
     // This changes the owner, but does not take possession of it
-    public entry fun transfer_with_cap<W: drop, M: drop>(
-        transfer_cap: &TransferCap<W, M>,
-        entry_noot: &mut EntryNoot<W, M>,
+    public entry fun transfer_with_cap<T: drop, M: drop>(
+        transfer_cap: &TransferCap<T, M>,
+        shared_wrapper: &mut SharedWrapper<T, M>,
         new_owner: address)
     {
-        let noot = option::borrow_mut(&mut entry_noot.noot);
+        let noot = option::borrow_mut(&mut shared_wrapper.noot);
         assert!(is_correct_transfer_cap(noot, transfer_cap), ENO_TRANSFER_PERMISSION);
-        entry_noot.owner = option::some(new_owner);
+        noot.owner = option::some(new_owner);
     }
 
-    // Noots cannot exist outside of entry_noot without their transfer_cap inside of them
+    // Noots cannot exist outside of shared_wrapper without their transfer_cap inside of them
     public fun take_with_cap<W, M>(
-        entry_noot: &mut EntryNoot<W, M>, 
+        shared_wrapper: &mut SharedWrapper<W, M>, 
         transfer_cap: TransferCap<W, M>, 
         new_owner: Option<address>
     ): Noot<W, M> {
-        let noot = option::extract(&mut entry_noot.noot);
+        let noot = option::extract(&mut shared_wrapper.noot);
         assert!(is_correct_transfer_cap(&noot, &transfer_cap), EWRONG_TRANSFER_CAP);
         assert!(!is_fully_owned(&noot), ETRANSFER_CAP_ALREADY_EXISTS);
         option::fill(&mut noot.transfer_cap, transfer_cap);
@@ -214,54 +234,49 @@ module noot::noot {
         noot
     }
 
-    public entry fun take_and_transfer<W, M>(entry_noot: &mut EntryNoot<W, M>, transfer_cap: TransferCap<W, M>, new_owner: address) {
-        let noot = take_with_cap(entry_noot, transfer_cap, option::some(new_owner));
+    public entry fun take_and_transfer<W, M>(shared_wrapper: &mut SharedWrapper<W, M>, transfer_cap: TransferCap<W, M>, new_owner: address) {
+        let noot = take_with_cap(shared_wrapper, transfer_cap, option::some(new_owner));
         transfer::transfer(noot, new_owner);
     }
 
-    // === NootEntry Accessors ===
+    // These accessors are necessary while a noot is shared (missing its transfer cap). This allows noots to be used
+    // as usual, albeit with an extra wrapping-function around it to get the proper reference
+    public fun borrow_shared<W, M>(shared_wrapper: &SharedWrapper<W, M>, ctx: &TxContext): &Noot<W, M> {
+        assert!(option::is_some(&shared_wrapper.noot), EEMPTY_SHARED_WRAPPER);
+        let noot_ref = option::borrow(&shared_wrapper.noot);
 
-    // Currently, we're allowing any EntryNoot to be borrowed mutably
-    // What are the security implications of this? Good or bad idea?
-    public fun entry_borrow<W, M>(entry_noot: &EntryNoot<W, M>, ctx: &TxContext): &Noot<W, M> {
-        assert!(option::is_some(&entry_noot.noot), EEMPTY_ENTRY_NOOT);
-        let noot_ref = option::borrow(&entry_noot.noot);
-
-        // assert!(is_owner(tx_context::sender(ctx), noot_ref), ENOT_OWNER);
+        assert!(is_owner(tx_context::sender(ctx), noot_ref), ENOT_OWNER);
         noot_ref
     }
 
-    public fun entry_borrow_mut<W, M>(entry_noot: &mut EntryNoot<W, M>, ctx: &TxContext): &mut Noot<W, M> {
-        assert!(option::is_some(&entry_noot.noot), EEMPTY_ENTRY_NOOT);
-        let noot_ref = option::borrow_mut(&mut entry_noot.noot);
+    public fun borrow_shared_mut<W, M>(shared_wrapper: &mut SharedWrapper<W, M>, ctx: &TxContext): &mut Noot<W, M> {
+        assert!(option::is_some(&shared_wrapper.noot), EEMPTY_SHARED_WRAPPER);
+        let noot_ref = option::borrow_mut(&mut shared_wrapper.noot);
+
         assert!(is_owner(tx_context::sender(ctx), noot_ref), ENOT_OWNER);
         noot_ref
     }
 
     // === Transfers restricted to using a witness ===
-
-    // So long as the market module keeps its witness private, these functions can only be used
-    // by the market module. No transfer-cap needed.
-    // This is a very powerful function, in that it allows market modules to transfer their own noots
+    // So long as the defining module keeps its witness private, these functions can only be used
+    // by the defining module. No transfer-cap needed.
+    // This is a very powerful function, in that it allows modules to transfer their own noots
     // arbitrarily.
 
     // This transfer function should be used, rather than the polymorphic transfer (sui::transfer)
-    public fun transfer<W: drop, M: drop>(_witness: M, entry_noot: EntryNoot<W, M>, new_owner: address) {
-        let noot = option::borrow_mut(&mut entry_noot.noot);
-        assert!(is_fully_owned(noot), ENO_TRANSFER_PERMISSION);
+    // Polymorphic transfer could result in an inconsistent state, where the writer (Sui-defined owner)
+    // is not the same as the module-defined owner (noot.owner).
+    public fun transfer<W: drop, M: drop>(_witness: M, noot: Noot<W, M>, new_owner: address) {
+        assert!(is_fully_owned(&noot), ENO_TRANSFER_PERMISSION);
 
-        entry_noot.owner = option::some(new_owner);
-
-        // TO DO; this will have to be consumed by value, and we'll have to tell if an object is shared or not yet
-        // Right now we're assuming it's an owned-object
-        transfer::transfer(entry_noot, new_owner);
+        noot.owner = option::some(new_owner);
+        transfer::transfer(noot, new_owner);
     }
 
     // Should we allow the world module, W, to do this as transfer as well?
-    // World modules should not be allowed to change ownership; only market modules can.
 
 
-    // === WorldConfig Functions ===
+    // === FamilyConfig Functions ===
 
     public fun borrow_world_display<T: drop>(world_config: &WorldConfig<T>): &VecMap<String, String> {
         &world_config.display
@@ -375,7 +390,7 @@ module noot::noot {
         noot
     }
 
-    // === Ownership Checkers ===
+    // === Authority Checkers ===
 
     public fun is_owner<T, M>(addr: address, noot: &Noot<T, M>): bool {
         if (option::is_some(&noot.owner)) {
