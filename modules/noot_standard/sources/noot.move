@@ -51,15 +51,15 @@ module noot::noot {
         body: Data
     }
 
-    // Only one WorldConfig object may exist per World. A module can only create one World.
+    // Only one WorldRegistry object may exist per World. A module can only create one World.
     // Every World consists of 'noot types', specified by their noot.type_id.
-    // The WorldConfig acts as a template, specifying the default display and data for each noot type.
+    // The WorldRegistry acts as a template, specifying the default display and data for each noot type.
     // Each noot type can have arbitrary data.
-    // The WorldConfig also stores its own 'display', which can specify various information (name,
+    // The WorldRegistry also stores its own 'display', which can specify various information (name,
     // website, description) about the World as a whole.
     // Can be owned, shared, frozen, or stored. Can never be deleted.
     // Because of this, the owner can arbitrarily do whatever it wants using sui::transfer
-    struct WorldConfig<phantom World> has key, store {
+    struct WorldRegistry<phantom World> has key, store {
         id: UID,
         display: VecMap<String, String>
     }
@@ -87,19 +87,19 @@ module noot::noot {
     // A module will define a noot type, using the witness pattern. This is a droppable
     // type
 
-    // Can only be called with a `one-time-witness` type, ensuring that there will only ever be one WorldConfig
+    // Can only be called with a `one-time-witness` type, ensuring that there will only ever be one WorldRegistry
     // per `Family`.
     public fun create_world<WORLD_GENESIS: drop, World: drop>(
         one_time_witness: WORLD_GENESIS,
         _witness: World,
         ctx: &mut TxContext
-    ): WorldConfig<World> {
+    ): WorldRegistry<World> {
         assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
 
         // TODO: add events
         // event::emit(CollectionCreated<T> {});
 
-        WorldConfig<World> {
+        WorldRegistry<World> {
             id: object::new(ctx),
             display: vec_map::empty<String, String>()
         }
@@ -261,13 +261,13 @@ module noot::noot {
     // World modules should not be allowed to change ownership; only market modules can.
 
 
-    // === WorldConfig Functions ===
+    // === WorldRegistry Functions ===
 
-    public fun borrow_world_display<T: drop>(world_config: &WorldConfig<T>): &VecMap<String, String> {
+    public fun borrow_world_display<T: drop>(world_config: &WorldRegistry<T>): &VecMap<String, String> {
         &world_config.display
     }
 
-    public fun borrow_world_display_mut<T: drop>(_witness: T, world_config: &mut WorldConfig<T>): &mut VecMap<String, String> {
+    public fun borrow_world_display_mut<T: drop>(_witness: T, world_config: &mut WorldRegistry<T>): &mut VecMap<String, String> {
         &mut world_config.display
     }
 
@@ -275,7 +275,7 @@ module noot::noot {
     // noot family
     public fun add_world_definition<Origin: drop, W: drop, D: store + copy + drop>(
         _witness: W, 
-        world_config: &mut WorldConfig<W>, 
+        world_config: &mut WorldRegistry<W>, 
         raw_key: vector<u8>,
         display: VecMap<String, String>,
         data: D
@@ -286,7 +286,7 @@ module noot::noot {
 
     public fun remove_world_definition<Origin: drop, F: drop, D: store + copy + drop>(
         _witness: F, 
-        world_config: &mut WorldConfig<F>, 
+        world_config: &mut WorldRegistry<F>, 
         raw_key: vector<u8>,
     ): (VecMap<String, String>, D) {
         let noot_data = dynamic_field::remove(&mut world_config.id, Key<Origin> { raw_key });
@@ -295,7 +295,7 @@ module noot::noot {
     }
 
     public fun borrow_world_definition<Origin: drop, W: drop, D: store + copy + drop>(
-        world_config: &WorldConfig<W>, 
+        world_config: &WorldRegistry<W>, 
         raw_key: vector<u8>,
     ): (&VecMap<String, String>, &D) {
         let noot_data = dynamic_field::borrow<Key<Origin>, NootData<D>>(&world_config.id, Key<Origin> { raw_key });
@@ -304,7 +304,7 @@ module noot::noot {
 
     public fun borrow_world_definition_mut<Origin: drop, W: drop, D: store + copy + drop>(
         _witness: W,
-        world_config: &mut WorldConfig<W>, 
+        world_config: &mut WorldRegistry<W>, 
         raw_key: vector<u8>,
     ): (&mut VecMap<String, String>, &mut D) {
         let noot_data = dynamic_field::borrow_mut<Key<Origin>, NootData<D>>(&mut world_config.id, Key<Origin> { raw_key });
@@ -316,7 +316,7 @@ module noot::noot {
     // Gets the data for a Noot inside of World W
     public fun borrow_data<Origin: drop, W: drop, M, D: store + drop + copy>(
         noot: &Noot<Origin, M>,
-        world_config: &WorldConfig<W>
+        world_config: &WorldRegistry<W>
     ): (&VecMap<String, String>, &D) {
         if (dynamic_field::exists_with_type<DataKey<W>, NootData<D>>(&noot.id, DataKey<W> {})) {
             let data = dynamic_field::borrow<DataKey<W>, NootData<D>>(&noot.id, DataKey<W> {});
@@ -330,7 +330,7 @@ module noot::noot {
     public fun borrow_data_mut<Origin: drop, W: drop, M, D: store + drop + copy>(
         _witness: W,
         noot: &mut Noot<Origin, M>,
-        world_config: &WorldConfig<W>
+        world_config: &WorldRegistry<W>
     ): &mut D {
         if (!dynamic_field::exists_with_type<DataKey<W>, NootData<D>>(&noot.id, DataKey<W> {})) {
             let (display, body) = borrow_world_definition<Origin, W, D>(world_config, noot.family_key);

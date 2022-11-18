@@ -27,28 +27,28 @@ module utils::rand {
         let bytes = object::uid_to_bytes(&uid);
         object::delete(uid);
 
-        let num = bytes_to_u64(bytes);
+        let num = from_bytes(bytes);
         modulo(num, max - min) + min
     }
 
-    public fun bytes_to_u64(bytes: vector<u8>): u64 {
+    public fun from_bytes(bytes: vector<u8>): u64 {
         assert!(vector::length(&bytes) >= 8, ETOO_FEW_BYTES);
 
         let i: u8 = 0;
         let sum: u64 = 0;
         while (i < 8) {
-            sum = sum + (*vector::borrow(&bytes, (i as u64)) as u64) * math::pow(2, i * 8);
+            sum = sum + (*vector::borrow(&bytes, (i as u64)) as u64) * math::pow(2, (7 - i) * 8);
             i = i + 1;
         };
 
         sum
     }
 
-    public fun modulo(x: u64, mod: u64): u64 {
-        assert!(mod > 0, EDIVISOR_MUST_BE_NON_ZERO);
+    public fun mod(x: u64, divisor: u64): u64 {
+        assert!(divisor > 0, EDIVISOR_MUST_BE_NON_ZERO);
 
-        let quotient = x / mod;
-        x - (quotient * mod)
+        let quotient = x / divisor;
+        x - (quotient * divisor)
     }
 }
 
