@@ -7,6 +7,6 @@ Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-fram
 NootStandard = { local = "../noot_standard" }
 
 [addresses]
-red_team = "0x0"
-noot = "0x0"
+royalties = "0x0"
+noot = "0x3"
 sui = "0x2"
