@@ -1,4 +1,6 @@
-module noot::lending {
+// Fill this in later
+
+module market::lending {
     use sui::object::UID;
     use noot::noot::TransferCap;
 

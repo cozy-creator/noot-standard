@@ -8,4 +8,5 @@ NootStandard = { local = "../noot_standard" }
 
 [addresses]
 sui = "0x2"
+noot = "0x3"
 factory = "0x0"

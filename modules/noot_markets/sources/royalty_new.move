@@ -1,4 +1,4 @@
-module market::royalty_market {
+module market::royalty_new {
     use sui::object::{UID, ID};
     use sui::coin::{Self, Coin};
     use sui::tx_context::{Self, TxContext};
@@ -13,6 +13,25 @@ module market::royalty_market {
     const EINSUFFICIENT_FUNDS: u64 = 2;
 
     struct Market has drop {}
+
+    // Treasury's are stored within the world treasury as a dynamic field
+    struct WorldTreasury has key {
+        id: UID
+    }
+
+    struct Treasury<phantom C> has store {
+        owed: vector<OwnerAmount>,
+        fund: Coin<C>
+    }
+
+    struct OwnerAmount has store {
+        pay_to: address,
+        amount: u64
+    }
+
+    public fun payout(treasury: &mut Treasury) {
+        
+    }
 
     // transfer_Cap is only optional until shared objects can be deleted in Sui.
     // This is because after an offer is sold, we cannot delete it becasue it's a
@@ -87,18 +106,18 @@ module market::royalty_market {
     // as such, the is_owner is kind of redundant. This fully consumes the noot, and shares it. Once
     // shared resources can be consumed (and not just referenced) by transactions in Sui, the
     // is_owner check will make more sense.
-    public entry fun create_sell_offer_<C, T: drop>(price: u64, noot: Noot<T, Market>, royalty: &Royalty<T>, market_bps: u64, ctx: &mut TxContext) {
+    public entry fun create_sell_offer_<C, T: drop>(price: u64, noot: &mut Noot<T, Market>, market_bps: u16, ctx: &mut TxContext) {
         // Assert that the transfer cap still exists within the Noot
-        assert!(noot::is_fully_owned<T, Market>(&noot), ENO_TRANSFER_PERMISSION);
+        assert!(noot::is_fully_owned<T, Market>(noot), ENO_TRANSFER_PERMISSION);
         // Assert that the owner of this Noot is sending this tx
-        assert!(noot::is_owner<T, Market>(tx_context::sender(ctx), &noot), ENOT_OWNER);
+        assert!(noot::is_owner<T, Market>(tx_context::sender(ctx), noot), ENOT_OWNER);
 
         let transfer_cap = noot::extract_transfer_cap(Market {}, noot);
         let pay_to = tx_context::sender(ctx);
-        create_sell_offer<C,T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
+        create_sell_offer<C,T>(pay_to, price, transfer_cap, market_bps, ctx);
     }
 
-    public fun create_sell_offer<C, T>(pay_to: address, price: u64, transfer_cap: TransferCap<T, Market>, royalty: &Royalty<T>, market_bps: u64, ctx: &mut TxContext) {
+    public fun create_sell_offer<C, T>(pay_to: address, price: u64, transfer_cap: TransferCap<T, Market>, market_bps: u16, ctx: &mut TxContext) {
         let for_sale = SellOffer<C, T> {
             id: object::new(ctx),
             pay_to,

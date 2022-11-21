@@ -60,6 +60,9 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Does transfer_cap need to be bound to a specific world?
+- Should the transfer_cap be inside of the Noot, or the EntryNoot?
+- Idea: for the EntryNoot, we could add a boolean field 'readable' which, when set to false, stops a noot from borrowed immutably.
 - For the deconstruct function, we may want to check ownership in some way, just in case.
 - Consider moving the transfer_cap to the EntryNoot, rather than the noot.
 - For borrowing a noot from a shared wrapper, do we need to assert that the transaction-sender is the owner? Note that because 'noots' have store, a user can (1) polymorphic-transfer the noot to someone else, allowing them to get a reference to the noot, or even full possession of it, while not owning it, or (2) store the noot in a custom struct, share it, and then allow anyone to get a reference to it, or take it by value. That's why it's important function-creators check is_owner for a noot, although if they want lots of people to be able to write to it or read from it, they can.
