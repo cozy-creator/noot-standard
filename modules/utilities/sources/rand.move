@@ -28,7 +28,7 @@ module utils::rand {
         object::delete(uid);
 
         let num = from_bytes(bytes);
-        modulo(num, max - min) + min
+        mod(num, max - min) + min
     }
 
     public fun from_bytes(bytes: vector<u8>): u64 {

@@ -8,15 +8,13 @@ module noot::noot {
     use std::string::{String};
     use std::vector;
     use noot::inventory::{Self, Inventory};
+    use noot::owner_object::{Self, OwnerObject};
 
     const EBAD_WITNESS: u64 = 0;
     const ENOT_OWNER: u64 = 1;
     const ENO_TRANSFER_PERMISSION: u64 = 2;
     const EWRONG_TRANSFER_CAP: u64 = 3;
     const ETRANSFER_CAP_ALREADY_EXISTS: u64 = 4;
-    const EINSUFFICIENT_FUNDS: u64 = 5;
-    const EINCORRECT_DATA_REFERENCE: u64 = 6;
-    const EEMPTY_ENTRY_NOOT: u64 = 7;
 
     // World is the world from which the noot originates; its native world. This is a witness struct that can be
     // produced only by the module that created the world, such as 'Minecraft' or 'Outlaw_Sky'.
@@ -50,9 +48,9 @@ module noot::noot {
     // Once shared-objects can be deleted, noot will no longer be optional here.
     struct EntryNoot<phantom World, phantom Market> has key {
         id: UID,
-        owners: vector<address>,
+        owner: address,
         noot: Option<Noot<World>>,
-        transfer_cap: Option<TransferCap<World, Market>>,
+        transfer_cap: Option<TransferCap<World, Market>>
     }
 
     // A struct used to store noots in inventory
@@ -134,7 +132,7 @@ module noot::noot {
 
     public fun craft<World: drop, Market: drop, D: store + copy + drop>(
         _witness: World,
-        owners: vector<address>,
+        owner: address,
         quantity: u16,
         type_id: vector<u8>,
         data_maybe: Option<NootData<D>>,
@@ -159,7 +157,7 @@ module noot::noot {
 
         EntryNoot { 
             id: object::new(ctx),
-            owners,
+            owner,
             noot: option::some(noot),
             transfer_cap: option::some( TransferCap<World, Market> { 
                     id: object::new(ctx),
@@ -184,7 +182,7 @@ module noot::noot {
         assert!(is_fully_owned(entry_noot), ENO_TRANSFER_PERMISSION);
         assert!(is_owner(entry_noot, ctx), ENOT_OWNER);
 
-        let (noot, transfer_cap) = extract(entry_noot);
+        let (noot, transfer_cap) = extract(entry_noot, ctx);
         
         let Noot { id, quantity: _, type_id: _, inventory } = noot;
         object::delete(id);
@@ -198,8 +196,9 @@ module noot::noot {
     // === NootEntry Accessors ===
 
     // Aborts if the EntryNoot is empty
-    // Anyone is allowed to borrow a read-reference, regardless of ownership
-    public fun borrow<W, M>(entry_noot: &EntryNoot<W, M>, _ctx: &TxContext): &Noot<W> {
+    // Noots cannot be read from unless you are the owner
+    public fun borrow<W, M>(entry_noot: &EntryNoot<W, M>, ctx: &TxContext): &Noot<W> {
+        assert!(is_owner(entry_noot, ctx), ENOT_OWNER);
         option::borrow(&entry_noot.noot)
     }
 
@@ -209,10 +208,24 @@ module noot::noot {
         option::borrow_mut(&mut entry_noot.noot)
     }
 
+    // Same as above, 
+    public fun obj_borrow<W, M>(entry_noot: &EntryNoot<W, M>, permission: &OwnerObject<W>, ctx: &TxContext): & Noot<W> {
+        assert!(obj_is_owner(entry_noot, permission, ctx), ENOT_OWNER);
+        option::borrow(&entry_noot.noot)
+    }
+
+    public fun obj_borrow_mut<W, M>(entry_noot: &mut EntryNoot<W, M>, permission: &OwnerObject<W>, ctx: &TxContext): &mut Noot<W> {
+        assert!(obj_is_owner(entry_noot, permission, ctx), ENOT_OWNER);
+        option::borrow_mut(&mut entry_noot.noot)
+    }
+
     // Private function; we do not want Noots to exist outside of EntryNoots, otherwise we could
     // lose control of their functionality.
     // In the future, this will consume the EntryNoot and deconstruct it
-    fun extract<W, M>(entry_noot: &mut EntryNoot<W, M>): (Noot<W>, TransferCap<W, M>) {
+    fun extract<W, M>(entry_noot: &mut EntryNoot<W, M>, ctx: &TxContext): (Noot<W>, TransferCap<W, M>) {
+        assert!(is_fully_owned(entry_noot), ENO_TRANSFER_PERMISSION);
+        assert!(is_owner(entry_noot, ctx), ENOT_OWNER);
+
         let noot = option::extract(&mut entry_noot.noot);
         let transfer_cap = option::extract(&mut entry_noot.transfer_cap);
 
@@ -222,6 +235,35 @@ module noot::noot {
     // This would be like a noot flash-loan; the noot must be returned to the EntryNoot by the
     // end of the transaction. I'm not sure how secure or useful this would be though?
     public fun borrow_by_value() {}
+
+    // === Peer-to-Peer Transfers ===
+
+    // new_owner can also be an object-id, related to 
+    public fun transfer<W, M>(entry_noot: &mut EntryNoot<W, M>, new_owner: address, mark: vector<u8>, ctx: &TxContext) {
+        assert!(is_owner(entry_noot, ctx), ENOT_OWNER);
+        transfer_internal(entry_noot, new_owner, mark);
+    }
+
+    public fun obj_transfer<W, M>(entry_noot: &mut EntryNoot<W, M>, new_owner: address, mark: vector<u8>, permission: &OwnerObject<W>, ctx: &TxContext) {
+        assert!(obj_is_owner(entry_noot, permission, ctx), ENOT_OWNER);
+        transfer_internal(entry_noot, new_owner, mark);
+    }
+
+    fun transfer_internal<W, M>(entry_noot: &mut EntryNoot<W, M>, new_owner: address, mark: vector<u8>) {
+        assert!(is_fully_owned(entry_noot), ENO_TRANSFER_PERMISSION);
+
+        // Add a claim mark
+        let transfer_cap = option::borrow_mut(&mut entry_noot.transfer_cap);
+        vector::push_back(&mut transfer_cap.claims, mark);
+
+        // TO DO validate claim-bytes
+
+        entry_noot.owner = new_owner;
+    }
+
+    // === Mark-based reclaimer transfers ===
+
+    public fun reclaim() {}
 
     // === Market Functions, for Noot marketplaces ===
 
@@ -239,22 +281,36 @@ module noot::noot {
         option::extract(&mut entry_noot.transfer_cap)
     }
 
+    // We ask for a mutable reference to the OwnerObject for security
+    public fun obj_extract_transfer_cap<W: drop, Market: drop>(
+        _witness: Market, 
+        entry_noot: &mut EntryNoot<W, Market>,
+        permission: &mut OwnerObject<W>,
+        ctx: &TxContext
+    ): TransferCap<W, Market> {
+        assert!(obj_is_owner(entry_noot, permission, ctx), ENOT_OWNER);
+
+        option::extract(&mut entry_noot.transfer_cap)
+    }
+
     // === Transfers restricted to using the Transfer-Cap ===
 
     // This changes the owner and wipes any claim-marks that were on the transfer_cap
     public entry fun transfer_with_cap<W: drop, M: drop>(
         transfer_cap: &mut TransferCap<W, M>,
         entry_noot: &mut EntryNoot<W, M>,
-        new_owners: vector<address>)
+        new_owner: address)
     {
         let noot = option::borrow_mut(&mut entry_noot.noot);
-        assert!(is_correct_transfer_cap(noot, transfer_cap), ENO_TRANSFER_PERMISSION);
-        entry_noot.owners = new_owners;
+        assert!(is_correct_transfer_cap(noot, transfer_cap), EWRONG_TRANSFER_CAP);
+        entry_noot.owner = new_owner;
+
+        // Wipe the claims
         transfer_cap.claims = vector::empty();
     }
 
     public entry fun fill_transfer_cap<W, M>(entry_noot: &mut EntryNoot<W, M>, transfer_cap: TransferCap<W, M>) {
-        assert!(is_correct_transfer_cap(option::borrow(&entry_noot.noot), &transfer_cap), ENO_TRANSFER_PERMISSION);
+        assert!(is_correct_transfer_cap(option::borrow(&entry_noot.noot), &transfer_cap), EWRONG_TRANSFER_CAP);
         option::fill(&mut entry_noot.transfer_cap, transfer_cap);
     }
 
@@ -359,33 +415,35 @@ module noot::noot {
 
     // These are special accessors for storing noots inside of inventories, that make sure the owner
     // field is correctly set.
-    // These need to be thought out and rewritten
-    public fun deposit_noot<W, M, Namespace: drop>(
+    // In the future this will consume and destroy the EntryNoot
+    public fun deposit_noot<World1, World2, Market, Namespace: drop>(
         witness: Namespace,
-        inventory: &mut Inventory,
-        raw_key: vector<u8>,
-        entry_noot: &mut EntryNoot<W, M>,
+        inventory_noot: &mut EntryNoot<World1, Market>,
+        deposit_noot: &mut EntryNoot<World2, Market>,
+        noot_key: vector<u8>,
+        transfer_cap_key: vector<u8>,
         ctx: &mut TxContext
     ) {
-        let (noot, transfer_cap) = extract(entry_noot);
+        // Aborts if sender is not the owner
+        let (noot, transfer_cap) = extract(entry_noot, ctx);
         let noot_store = NootStore { id: object::new(ctx), noot, transfer_cap };
-        inventory::add(witness, inventory, raw_key, noot_store, ctx);
+        inventory::add(witness, &mut inventory_noot.inventory, raw_key, noot_store);
     }
 
     public fun withdraw_noot<W, M, Namespace: drop>(
         witness: Namespace,
         inventory: &mut Inventory,
         raw_key: vector<u8>,
-        new_owners: vector<address>,
+        new_owner: address,
         ctx: &mut TxContext
     ) {
-        let noot_store = inventory::remove<Namespace, NootStore<W, M>>(witness, inventory, raw_key, ctx);
+        let noot_store = inventory::remove<Namespace, NootStore<W, M>>(witness, inventory, raw_key);
         let NootStore { id, noot, transfer_cap } = noot_store;
         object::delete(id);
 
         let entry_noot = EntryNoot {
             id: object::new(ctx),
-            owners: new_owners,
+            owner: new_owner,
             noot: option::some(noot),
             transfer_cap: option::some(transfer_cap)
         };
@@ -396,14 +454,18 @@ module noot::noot {
     // === Ownership Checkers ===
 
     public fun is_owner_addr<World, M>(entry_noot: &EntryNoot<World, M>, addr: &address): bool {
-        if (vector::length(&entry_noot.owners) == 0) { return true };
-        vector::contains(&entry_noot.owners, addr)
+        &entry_noot.owner == addr
     }
 
     // Once multiple addresses can sign a transaction, this function will be more complex
     // If we can attach memos to the transaction-context, that would be awesome too
     public fun is_owner<World, M>(entry_noot: &EntryNoot<World, M>, ctx: &TxContext): bool {
         is_owner_addr(entry_noot, &tx_context::sender(ctx))
+    }
+
+    public fun obj_is_owner<World, M>(entry_noot: &EntryNoot<World, M>, permission: &OwnerObject<World>, ctx: &TxContext) : bool {
+        if (owner_object::is_expired(permission, ctx)) { return false };
+        entry_noot.owner == object::id_address(permission)
     }
 
     public fun is_fully_owned<W, M>(entry_noot: &EntryNoot<W, M>): bool {

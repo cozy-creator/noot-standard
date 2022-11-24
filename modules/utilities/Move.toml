@@ -1,10 +1,10 @@
 [package]
 name = "SuiUtils"
-version = "0.0.1"
+version = "0.0.2"
 
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework", rev = "devnet" }
 
 [addresses]
-utils = "0x0"
+utils = "0x3"
 sui = "0x2"

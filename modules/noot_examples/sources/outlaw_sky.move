@@ -8,6 +8,7 @@ module noot_examples::outlaw_sky {
     use noot::noot::{Self, Noot, NootData};
     use noot::royalty_market::{Self, Market};
     use noot::coin2;
+    use noot::inventory;
     use std::string::{Self, String};
     use std::option;
 
@@ -126,5 +127,15 @@ module noot_examples::outlaw_sky {
         };
 
         vec_map::insert(&mut body_ref.traits, key, Trait { base, variant });
+    }
+
+    public fun enumerate_inventory(noot: &mut Noot<OutlawSky>) {
+        let namespaces = noot::inventory_namespaces(noot);
+        let index = noot::inventory_index<OutlawSky>(noot);
+        let i = 0;
+        while (i < vector::length(index)) {
+            let item = noot::inventory_borrow_mut(OutlawSky {}, index[i]);
+
+        }
     }
 }

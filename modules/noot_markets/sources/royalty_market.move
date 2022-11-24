@@ -87,15 +87,15 @@ module market::royalty_market {
     // as such, the is_owner is kind of redundant. This fully consumes the noot, and shares it. Once
     // shared resources can be consumed (and not just referenced) by transactions in Sui, the
     // is_owner check will make more sense.
-    public entry fun create_sell_offer_<C, T: drop>(price: u64, noot: Noot<T, Market>, royalty: &Royalty<T>, market_bps: u64, ctx: &mut TxContext) {
-        // Assert that the transfer cap still exists within the Noot
-        assert!(noot::is_fully_owned<T, Market>(&noot), ENO_TRANSFER_PERMISSION);
-        // Assert that the owner of this Noot is sending this tx
-        assert!(noot::is_owner<T, Market>(tx_context::sender(ctx), &noot), ENOT_OWNER);
-
-        let transfer_cap = noot::extract_transfer_cap(Market {}, noot);
+    public entry fun create_sell_offer_<C, W>(price: u64, entry_noot: &mut EntryNoot<W>, royalty: &Royalty<W>, market_bps: u64, ctx: &mut TxContext) {
+        let transfer_cap = noot::extract_transfer_cap<W, Market>(Market {}, entry_noot, ctx);
         let pay_to = tx_context::sender(ctx);
         create_sell_offer<C,T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
+    }
+
+    public fun obj_create_sell_offer_<C, W>(price: u64, entry_noot: &mut EntryNoot<W>, royalty: &Royalty<W>, market_bps: u64, pay_to: address, obj: &OwnerObject, ctx: &mut TxContext) {
+        let transfer_cap = noot::obj_extract_transfer_cap<W, Market>(Market {}, entry_noot, permission);
+        create_sell_offer<C, T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
     }
 
     public fun create_sell_offer<C, T>(pay_to: address, price: u64, transfer_cap: TransferCap<T, Market>, royalty: &Royalty<T>, market_bps: u64, ctx: &mut TxContext) {

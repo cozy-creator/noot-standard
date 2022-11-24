@@ -1,9 +1,11 @@
 // General purpose functions for converting data types
 
 module utils::encode {
-    use sui::vec_map::{Self, VecMap};
     use std::string::{Self, String};
     use std::vector;
+    use std::ascii;
+    use std::type_name;
+    use sui::vec_map::{Self, VecMap};
 
     // This will fail if there is an odd number of entries in the first vector
     // It will also fail if the bytes are not utf8 strings
@@ -21,5 +23,14 @@ module utils::encode {
         };
 
         output
+    }
+
+    public fun type_name<T>(): String {
+        let ascii_name = type_name::into_string(type_name::get<T>());
+        string::utf8(ascii::into_bytes(ascii_name))
+    }
+
+    public fun type_name_ascii<T>(): ascii::String {
+        type_name::into_string(type_name::get<T>())
     }
 }

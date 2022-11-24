@@ -216,6 +216,22 @@ module noot_examples::minecraft {
         };
     }
 
+    public fun repair_sword(
+        sword: &mut Noot<Minecraft>,
+        blacksmith_hammer: &mut Noot<Minecraft>,
+        world_config: &WorldConfig<Minecraft>
+    ) {
+        assert!(is_type_id(sword, 5), EINCORRECT_ITEM_TYPE);
+        assert!(is_type_id(blacksmith_hammer, 10), EINCORRECT_ITEM_TYPE);
+
+        let (_display, body) = noot::borrow_data_mut(&mut sword, default_data, ctx);
+        body.durability = 1500;
+    }
+
+    public fun enchant() {}
+
+    // artificer
+
     public fun is_correct_server_cap(server_admin: &ServerCap, server: &World): bool {
         (server_admin.for == object::uid_to_inner(&server.id))
     }
