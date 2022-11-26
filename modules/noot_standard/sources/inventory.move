@@ -50,6 +50,7 @@ module noot::inventory {
     use std::vector;
     use std::ascii::{Self, String};
     use std::hash;
+    use std::option::{Self, Option};
     use utils::encode;
 
     const EITEM_ALREADY_EXISTS: u64 = 0;
@@ -90,7 +91,8 @@ module noot::inventory {
         inventory: &mut Inventory,
         value: Value
     ) {
-        add_internal<Namespace, Value>(inventory, object::id(&value), value);
+        let raw_key = object::id_to_bytes(&object::id(&value));
+        add_internal<Namespace, Value>(inventory, raw_key, value);
     }
 
     // Used internally to bypass the `witness` requirement
@@ -135,13 +137,13 @@ module noot::inventory {
     ): Option<ValueOut> {
         let value_out = option::none<ValueOut>();
 
-        if (exists_with_type<Namespace, ValueOut>(inventory, *raw_key)) {
-            option::fill(value_out, remove_internal(inventory, *raw_key));
-        } else if (exists_<Namespace>(inventory, *raw_key)) {
+        if (exists_with_type<Namespace, ValueOut>(inventory, raw_key)) {
+            option::fill(&mut value_out, remove_internal<Namespace, ValueOut>(inventory, raw_key));
+        } else if (exists_<Namespace>(inventory, raw_key)) {
             assert!(false, EWRONG_ITEM_TYPE);
         };
 
-        add_internal(inventory, raw_key, value_in)
+        add_internal<Namespace, ValueIn>(inventory, raw_key, value_in);
 
         value_out
     }
@@ -199,7 +201,7 @@ module noot::inventory {
 
     // Returns all namespaces, so that they can be enumerated over
     public fun namespaces(inventory: &Inventory): vector<String> {
-        &inventory.namespaces
+        inventory.namespaces
     }
 
     // Retrieves the index for the specified namespace so that it can be enumerated over
@@ -209,7 +211,7 @@ module noot::inventory {
         if (!exists) {
             vector::empty()
         } else {
-            &vector::borrow(&inventory.index, i)
+            *vector::borrow(inventory.index, i)
         }
     }
 
