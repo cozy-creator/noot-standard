@@ -93,7 +93,7 @@ module market::royalty_market {
         create_sell_offer<C,T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
     }
 
-    public fun obj_create_sell_offer_<C, W>(price: u64, entry_noot: &mut EntryNoot<W>, royalty: &Royalty<W>, market_bps: u64, pay_to: address, obj: &OwnerObject, ctx: &mut TxContext) {
+    public fun obj_create_sell_offer_<C, W>(price: u64, entry_noot: &mut EntryNoot<W>, royalty: &Royalty<W>, market_bps: u64, pay_to: address, permission: &mut OwnerObject, ctx: &mut TxContext) {
         let transfer_cap = noot::obj_extract_transfer_cap<W, Market>(Market {}, entry_noot, permission);
         create_sell_offer<C, T>(pay_to, price, transfer_cap, royalty, market_bps, ctx);
     }

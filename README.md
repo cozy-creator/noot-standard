@@ -60,6 +60,8 @@ Now that I think of it, the Metaplex royalty system is pretty dumb; on Solana al
 
 ### To Do
 
+- Should we simplify world-config IDs down to u64s rather than arbitrary-bytes? ("vector<u8>")
+- How does cross-world default data work? I imagine that if Minecraft creates an item, and we want to read the data for that item, the default-data for that item could be defined by either Minecraft World-Config or Zelda World-Config. In this case, Zelda-config should take precidence. That is, each WorldConfig defines (1) what its item's data should be, and (2) what foreign items coming into this world's data should be. It cannot define what its data should be in someone else's world. So MinecraftWorldConfig would define (1) data for Minecraft items, and (2) data for Zelda-items; it CANNOT define what the data should be for Minecraft items in Zelda.
 - Does transfer_cap need to be bound to a specific world?
 - Should the transfer_cap be inside of the Noot, or the EntryNoot?
 - Idea: for the EntryNoot, we could add a boolean field 'readable' which, when set to false, stops a noot from borrowed immutably.
