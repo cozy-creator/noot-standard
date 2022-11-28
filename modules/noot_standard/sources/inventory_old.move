@@ -114,7 +114,7 @@ module noot::inventory_old {
         let (object_exists, i) = vector::index_of(&index.inner, &key);
         assert!(object_exists, EFIELD_DOES_NOT_EXIST);
 
-        let key_copy = vector::remove(&mut index.inner, i);
+        vector::remove(&mut index.inner, i);
         dynamic_object_field::remove(&mut inventory.id, key)
     }
 
@@ -193,6 +193,9 @@ module noot::inventory_old {
                 add_internal<Namespace, Value>(&mut new_inventory, *key, value, ctx);
                 i = i + 1;
             };
+
+            let Index { id, inner: _ } = index;
+            object::delete(id);
         };
 
         new_inventory
@@ -217,6 +220,9 @@ module noot::inventory_old {
                 add_internal<Namespace, Value>(self, *key, value, ctx);
                 i = i + 1;
             };
+
+            let Index { id, inner: _ } = index;
+            object::delete(id);
         };
 
         destroy(inventory);

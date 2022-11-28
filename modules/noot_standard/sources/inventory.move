@@ -43,6 +43,10 @@
 // In the future, we could add addresses as namespaces, allowing a namespace to be keyed by transaction-
 // sender's public key, rather by typing namespaces to structs produced by modules.
 
+// Caveats about Inventory:
+// 1. If you store a `Coin<C>` inside of an inventory, anyone with a mutable reference to the inventory
+// can use sui::coin::split to take it.
+
 module noot::inventory {
     use sui::dynamic_object_field;
     use sui::object::{Self, UID};
@@ -211,7 +215,7 @@ module noot::inventory {
         if (!exists) {
             vector::empty()
         } else {
-            *vector::borrow(inventory.index, i)
+            *vector::borrow(&inventory.index, i)
         }
     }
 
@@ -234,56 +238,37 @@ module noot::inventory {
     // FUTURE: make dynamic_object_field::remove more generic so that `Value` type does not need to be known
     // and need not be hetergenous
     public fun split<Namespace: drop, Value: key + store>(
-        _witness: Namespace,
+        witness: Namespace,
         inventory: &mut Inventory,
         ctx: &mut TxContext
     ): Inventory {
         let new_inventory = empty(ctx);
-
-        let (exists, i) = vector::index_of(&inventory.namespaces, &encode::type_name_ascii<Namespace>());
-
-        if (exists) {
-            let index = index<Namespace>(inventory);
-
-            let j = 0;
-            while (j < vector::length(&index)) {
-                let raw_key = vector::borrow(&index, j);
-                let value = remove_internal<Namespace, Value>(inventory, *raw_key);
-                add_internal<Namespace, Value>(&mut new_inventory, *raw_key, value);
-                j = j + 1;
-            };
-        };
-
+        join<Namespace, Value>(witness, &mut new_inventory, inventory);
         new_inventory
     }
 
-    // Aborts if there are key collisions within the namespace. The second inventory will be destroyed.
-    // In order to prevent orphaned-values, we only allow merging an inventory whose only namespace is the
-    // specified namespace.
-    public fun merge<Namespace: drop, Value: key + store>(
+    // For the specified namespace, this strips out everything from the second-inventory, and places it inside
+    // of the first inventory. Aborts if there are key collisions within the namespace.
+    public fun join<Namespace: drop, Value: key + store>(
         _witness: Namespace,
         self: &mut Inventory,
-        inventory: Inventory
+        inventory: &mut Inventory
     ) {
-        assert!(vector::length(&inventory.namespaces) == 1, EMERGE_WILL_ORPHAN_ITEMS);
-
-        let index = index<Namespace>(&inventory);
+        let index = index<Namespace>(inventory);
         let i = 0;
         while (i < vector::length(&index)) {
             let raw_key = vector::borrow(&index, i);
-            let value = remove_internal<Namespace, Value>(&mut inventory, *raw_key);
+            let value = remove_internal<Namespace, Value>(inventory, *raw_key);
             add_internal<Namespace, Value>(self, *raw_key, value);
             i = i + 1;
         };
-
-        destroy(inventory);
     }
 
     // We enforce a 'zero emissions' policy of leaving now wasted data behind. If Inventory were deleted
     // while still containing objects, those objects would be orphaned (rendered permanently inaccessible),
     // and remain in Sui's global storage wasting space forever.
     public entry fun destroy(inventory: Inventory) {
-        let Inventory { id, namespaces, index } = inventory;
+        let Inventory { id, namespaces, index: _ } = inventory;
         assert!(vector::length(&namespaces) == 0, EINVENTORY_NOT_EMPTY);
         object::delete(id);
     }

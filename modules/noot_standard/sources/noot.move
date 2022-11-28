@@ -1,3 +1,32 @@
+// Core Noot API:
+//
+// create-world: creates a WorldConfig, necessary for crafting Noots of type World.
+// add world definition
+// remove world definition
+//
+// craft: creates a noot. Noot<World> can only be created by World
+// deconstruct: destroys a noot, returns Inventory. Noot<World> can only be deconstructed by World.
+//
+// transfer: changes the noot-owner, leaves a claim-mark behind.
+// reclaim: uses up a claim-mark to reverse-transfer the noot-owner.
+// 
+// extract transfer-cap: removes the transfer-cap, given to market-module for use in selling / lending
+// transfer with transfer-cap: changes the noot-owner, wipes all claim-marks
+// fill transfer-cap: fully owns a noot by placing the transfer-cap back inside
+//
+// add data: limited to namespaced module (CRUD - create, read, update, delete)
+// borrow (read) data: anyone can
+// borrow-data mut: limited to namespaced module
+// remove data: limited to namespaced module
+//
+// deposit to inventory: limited to namespaced module (CRUD - inventory version)
+// read from inventory: anyone can
+// borrow-mut from inventory: limited to namespaced module
+// withdraw from inventory: limited to namespaced module
+//
+// store noot: a special operation for turning an EntryNoot into a StoredNoot
+// withdraw noot: a special operation for turning a stored noot back into an EntryNoot
+
 module noot::noot {
     use sui::object::{Self, ID, UID};
     use std::option::{Self, Option};
@@ -72,7 +101,9 @@ module noot::noot {
     // Only one WorldRegistry object may exist per World. A module can only create one World.
     // Specifically, a 'World' is a witness-type object created by the world-module.
     //
-    // A WorldRegistery defines a collection of 'noot types', index by their noot.type_id.
+    // A WorldRegistery defines a collection of 'noot types', indexed by their noot.type_id.
+    // We should add world namespacing to this, so that WorldConfigs can define data for noots
+    // imported from other worlds.
     //
     // The WorldRegistry acts as a data template, specifying the default display and data for each noot type.
     // Each noot type can have arbitrary data.
@@ -148,8 +179,7 @@ module noot::noot {
             inventory: inventory::empty(ctx)
         };
 
-        let new_noot = &mut noot;
-
+        // Add the optional supplied data if it exists
         if (option::is_some(&data_maybe)) {
             let data = option::destroy_some(data_maybe);
             dynamic_field::add(&mut noot.id, DataKey<World> {}, data);
@@ -418,16 +448,20 @@ module noot::noot {
     // In the future this will consume and destroy the EntryNoot
     public fun deposit_noot<World1, World2, Market, Namespace: drop>(
         witness: Namespace,
-        inventory_noot: &mut EntryNoot<World1, Market>,
-        deposit_noot: &mut EntryNoot<World2, Market>,
-        noot_key: vector<u8>,
-        transfer_cap_key: vector<u8>,
+        entry_self: &mut EntryNoot<World1, Market>,
+        entry_deposit: &mut EntryNoot<World2, Market>,
+        raw_key: vector<u8>,
         ctx: &mut TxContext
     ) {
-        // Aborts if sender is not the owner
-        let (noot, transfer_cap) = extract(entry_noot, ctx);
-        let noot_store = NootStore { id: object::new(ctx), noot, transfer_cap };
-        inventory::add(witness, &mut inventory_noot.inventory, raw_key, noot_store);
+        // Aborts if sender is not the owner of 'deposit'
+        let (deposit, transfer_cap) = extract(entry_deposit, ctx);
+        let TransferCap { id, for: _, claims: _ } = transfer_cap;
+        object::delete(id);
+
+        // Aborts if sender is not the owner of 'entry_self'
+        let self = borrow_mut(entry_self, ctx);
+
+        inventory::add(witness, &mut self.inventory, raw_key, deposit);
     }
 
     public fun withdraw_noot<W, M, Namespace: drop>(
