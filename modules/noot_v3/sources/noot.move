@@ -11,6 +11,7 @@
 
 module noot::noot {
     use std::vector;
+    use std::ascii;
     use sui::object::{Self, UID};
     use sui::tx_context::{Self, TxContext};
     use sui::math;
@@ -18,6 +19,8 @@ module noot::noot {
     use sui::dynamic_field;
     use sui::transfer;
     use sui::coin::Coin;
+    use noot::inventory::{Self, Inventory};
+    use noot::data_store::{Self, DataStore};
 
     // enums to specify the vector index for each corresponding permission
     // There must be one, and only one, owner at a time.
@@ -68,6 +71,9 @@ module noot::noot {
     const ENOT_RENTAL_OWNER: u64 = 5;
     const EINCORRECT_BALANCE: u64 = 6;
     const EWRONG_VAULT: u64 = 7;
+    const EWRONG_HOT_POTATO: u64 = 8;
+    const EAUTH_OBJECT_NOT_FOUND: u64 = 9;
+    const EWRONG_WORLD: u64 = 10;
 
     // stored object
     struct Auth has store, drop {
@@ -79,11 +85,24 @@ module noot::noot {
         id: UID
     }
 
-    // Can be single-writer, shared, or stored
-    struct Noot<phantom W> has key, store {
+    struct WorldRegistry has key, store {
         id: UID,
-        uid: UID, // stable-id; use for indexing
+        name: ascii::String
+    }
+
+    struct WorldKey has store {
+        world: ascii::String,
+        raw_key: vector<u8>
+    }
+
+    // Can be single-writer, shared, or stored
+    // We could potentially add a second UID, a stable UID, since this id can change
+    struct Noot has key, store {
+        id: UID,
+        world_key: WorldKey,
         auths: vector<Auth>,
+        data: DataStore,
+        inventory:Inventory,
         plugins: Plugins
     }
 
@@ -92,7 +111,6 @@ module noot::noot {
     public fun craft_noot(ctx: &mut TxContext): Noot {
         Noot {
             id: object::new(ctx),
-            uid: object::new(ctx),
             auths: vector::empty<Auth>(),
             plugins: Plugins { id: object::new(ctx) }
         }
@@ -113,7 +131,7 @@ module noot::noot {
         assert!(check_permission(&noot, ctx, ADMIN), ENO_PERMISSION);
 
         // We should check for liens or claim-marks
-        // We should remove any-share related things: auths, sell-orders
+        // We should remove any-share related plugins: auths, sell-orders
 
         recreate_noot(noot)
     }
@@ -131,7 +149,7 @@ module noot::noot {
 
     // =========== Auth Management ===============
 
-    public entry fun add_authorization(noot: &mut Noot, user: address, permissions: vector<bool>, ctx: &mut TxContext) {
+    public entry fun add_auth(noot: &mut Noot, user: address, permissions: vector<bool>, ctx: &mut TxContext) {
         assert!(vector::length(&permissions) == PERMISSION_LENGTH, EWRONG_SIZE);
         assert!(check_permission(noot, ctx, ADMIN), ENO_PERMISSION);
 
@@ -154,32 +172,111 @@ module noot::noot {
         }
     }
 
-    public entry fun remove_authorization(noot: &mut Noot, user: address, ctx: &mut TxContext) {
+    public entry fun remove_auth(noot: &mut Noot, user: address, ctx: &mut TxContext) {
         assert!(check_permission(noot, ctx, ADMIN), ENO_PERMISSION);
+        remove_auth_internal(noot, user);
+    }
 
+    fun remove_auth_internal(noot: &mut Noot, user: address) {
         let (exists, i) = index_of(&noot.auths, user);
         if (exists) {
             vector::remove(&mut noot.auths, i);
         }
     }
 
+    // =========== Auth Flashloan ===============
+
+    // Suppose we want to attach ownership to an object Obj, rather than an address abc123.
+    // Having to present Obj for every function-call as authorization would be unwieldly!
+    // Instead, we leave an auth record, object::id(Obj) = permisions associated with that object
+    // When the owner of Obj wants to use their noot, they will call borrow_auth(noot, obj)
+    // In the auth-record we will then replace the object-id with the sender's address
+    // The sender will then be able to pass all permissions recorded for that object
+    // Finally, to conclude the transaction the user must return the hot-potato, which sets
+    // the auth-address back to the object-id.
+
+    struct HotPotato { noot_id: ID, user_addr: address, obj_addr: address }
+
+    public fun borrow_auth<Obj: key>(
+        noot: &mut Noot,
+        obj: &Obj,
+        ctx: &mut TxContext
+    ): HotPotato {
+        let obj_addr = object::id_address(obj);
+        let user_addr = tx_context::sender(ctx);
+        let (exists, i) = index_of(&noot.auths, obj_addr);
+        assert!(exists, EAUTH_OBJECT_NOT_FOUND);
+
+        *vector::borrow_mut(&mut noots.auths, i).addr = user_addr;
+
+        HotPotato { for: object::id(noot), user_addr, obj_addr  }
+    }
+
+    public fun return_auth(noot: &mut Noot, hot_potato: HotPotato) {
+        let HotPotato { for, user_addr, obj_addr } = hot_potato;
+        assert!(for == object::id(noot), EWRONG_HOT_POTATO);
+
+        let (exists, i) = index_of(&noot.auths, user_addr);
+        assert!(exists, EAUTH_OBJECT_NOT_FOUND);
+
+        *vector::borrow_mut(&mut noots.auths, i).addr = obj_addr;
+    }
+
     // =========== Data Management ===============
 
-    public entry fun add_data(noot: &mut Noot, ctx: &mut TxContext) {
+    public entry fun add_data<Namespace: drop, Value: store + copy + drop>(
+        witness: Namespace,
+        noot: &mut Noot,
+        raw_key: vector<u8>,
+        value: Value,
+        ctx: &mut TxContext
+    ) {
         assert!(check_permission(noot, ctx, CREATE_DATA), ENO_PERMISSION);
-        // allow data to be modified
+        data_store::add(witness, &mut noot.data_store.id, raw_key, value);
     }
 
-    public fun borrow_data() {
+    public fun borrow_data<Namespace: drop, Value: store + copy + drop>(
+        noot: &Noot, 
+        world: &WorldRegistry, 
+        raw_key: vector<u8>
+    ): &Value {
+        assert!(world.name == encode::type_name_ascii<Namespace>(), EWRONG_WORLD);
+
+        if (!data_store::exists_with_type<vector<u8>, Value>(&noot.data.id, raw_key)) {
+            data_store::borrow<vector<u8>, Value>(&world.id, raw_key)
+        } else {
+            data_store::borrow<vector<u8>, Value>(&noot.data.id, raw_key)
+        }
     }
 
-    public fun borrow_data_mut(noot: &mut Noot, ctx: &mut TxContext) {
+    public fun borrow_data_mut<Namespace: drop, Value: store + copy + drop>(
+        witness1: Namespace,
+        witness2: Namespace,
+        noot: &mut Noot,
+        world: &WorldRegistry,
+        raw_key: vector<u8>,
+        ctx: &mut TxContext
+    ): &mut Value {
+        assert!(world.name == encode::type_name_ascii<Namespace>(), EWRONG_WORLD);
         assert!(check_permission(noot, ctx, UPDATE_DATA), ENO_PERMISSION);
-        // allow data to be modified
+
+        // Copy from WorldRegistry on write
+        if (!data_store::exists_with_type<vector<u8>, Value>(&noot.data.id, raw_key)) {
+            let data = *data_store::borrow<vector<u8>, Value>(&world.id, raw_key);
+            data_store::add<vector<u8>, Value>(witness1, &mut noot.data.id, raw_key, data);
+        };
+
+        data_store::borrow_mut<vector<u8>, Value>(witness2, &mut noot.data.id, raw_key)
     }
 
     public entry fun remove_data() {
+
     }
+
+    // =========== View Functions ===============
+    // Used by external processes to deserialize names, descriptions, images, files, etc.
+
+
 
     // ============ Inventory Management =================
 

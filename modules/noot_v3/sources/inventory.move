@@ -146,12 +146,12 @@ module noot::inventory {
         dynamic_object_field::exists_with_type<vector<u8>, Value>(&inventory.id, key)
     }
 
-    public fun namespace_exists(inventory: &Inventory, namespace: &ascii::String): bool {
-        vector::contains(&inventory.namespaces, namespace)
+    public fun namespace_exists<Namespace>(inventory: &Inventory): bool {
+        vector::contains(&inventory.namespaces, &encode::type_name_ascii<Namespace>())
     }
 
-    public fun namespace_exists_<Namespace>(inventory: &Inventory): bool {
-        vector::contains(&inventory.namespaces, &encode::type_name_ascii<Namespace>())
+    public fun namespace_exists_(inventory: &Inventory, namespace: &ascii::String): bool {
+        vector::contains(&inventory.namespaces, namespace)
     }
 
     // Returns all namespaces, so that they can be enumerated over
@@ -162,6 +162,10 @@ module noot::inventory {
     // Retrieves the index for the specified namespace so that it can be enumerated over
     public fun index<Namespace>(inventory: &Inventory): vector<vector<u8>> {
         let namespace = encode::type_name_ascii<Namespace>();
+        index(inventory, namespace)
+    }
+
+    public fun index_(inventory: &Inventory, namespace: &ascii::String): vector<vector<u8>> {
         let (exists, i) = vector::index_of(&inventory.namespaces, &namespace);
         if (!exists) {
             vector::empty()
@@ -179,6 +183,11 @@ module noot::inventory {
             i = i + 1;
         };
         size
+    }
+
+    public fun size_<Namespace>(inventory: &Inventory): u64 {
+        let index = index<Namespace>(inventory);
+        vector::length(index)
     }
 
     // Takes an `Inventory`, removes the namespaced portion specified, attaches that namespace to a new inventory,
@@ -229,7 +238,7 @@ module noot::inventory {
     public fun into_key<Namespace: drop>(raw_key: &vector<u8>): vector<u8> {
         let namespace = encode::type_name_ascii<Namespace>();
         let key_preimage = ascii::into_bytes(namespace);
-        // prevents collissions caused by a namespace that is a prefix of another namespace
+        // prevents collisions caused by a namespace that is a prefix of another namespace
         vector::push_back(&mut key_preimage, 124u8);
         vector::append(&mut key_preimage, *raw_key);
         hash::sha2_256(key_preimage)
