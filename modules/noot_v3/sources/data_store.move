@@ -132,9 +132,32 @@ module noot::data_store {
         dynamic_field::borrow_mut(&mut data_store.id, key)
     }
 
-    public fun borrow_with_default() { }
+    public fun borrow_with_default<Namespace: drop, Value: store + copy + drop>(
+        data_store: &DataStore,
+        raw_key: vector<u8>,
+        default_data: &DataStore
+    ): &Value {
+        if (exists_with_type<Namespace, Value>(data_store, raw_key)) {
+            borrow<Namespace, Value>(data_store, raw_key)
+        } else {
+            borrow<Namespace, Value>(default_data, raw_key)
+        }
+    }
 
-    public fun borrow_mut_with_default() { }
+    // Copy-on-write behavior, with default as the initial value
+    public fun borrow_mut_with_default<Namespace: drop, Value: store + copy + drop>(
+        witness: Namespace,
+        data_store: &mut DataStore,
+        raw_key: vector<u8>,
+        default_data: &DataStore
+    ): &mut Value { 
+        if (!exists_with_type<Namespace, Value>(data_store, raw_key)) {
+            let value = *borrow<Namespace, Value>(default_data, raw_key);
+            add_internal(data_store, raw_key, value);
+        };
+
+        borrow_mut<Namespace, Value>(witness, data_store, raw_key)
+    }
 
     /// Returns true if and only if the `data_store` has a dynamic field with the name specified by
     /// `key: vector<u8>`.
@@ -149,7 +172,7 @@ module noot::data_store {
 
     /// Returns true if and only if the `data_store` has a dynamic field with the name specified by
     /// `key: vector<u8>` with an assigned value of type `Value`.
-    public fun exists_with_type<Namespace: drop, Value: store + copy + drop>(
+    public fun <Namespace, Value><data_store, raw_keyNamespace: drop, Value: store + copy + drop>(
         data_store: &DataStore,
         raw_key: vector<u8>,
     ): bool {

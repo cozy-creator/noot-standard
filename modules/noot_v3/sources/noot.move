@@ -87,7 +87,8 @@ module noot::noot {
 
     struct WorldRegistry has key, store {
         id: UID,
-        name: ascii::String
+        name: ascii::String,
+        data: DataStore
     }
 
     struct WorldKey has store {
@@ -232,6 +233,7 @@ module noot::noot {
         ctx: &mut TxContext
     ) {
         assert!(check_permission(noot, ctx, CREATE_DATA), ENO_PERMISSION);
+        
         data_store::add(witness, &mut noot.data_store.id, raw_key, value);
     }
 
@@ -242,16 +244,11 @@ module noot::noot {
     ): &Value {
         assert!(world.name == encode::type_name_ascii<Namespace>(), EWRONG_WORLD);
 
-        if (!data_store::exists_with_type<vector<u8>, Value>(&noot.data.id, raw_key)) {
-            data_store::borrow<vector<u8>, Value>(&world.id, raw_key)
-        } else {
-            data_store::borrow<vector<u8>, Value>(&noot.data.id, raw_key)
-        }
+        data_store::borrow_with_default<Namespace, Value>(&noot.data, raw_key, &world.data)
     }
 
     public fun borrow_data_mut<Namespace: drop, Value: store + copy + drop>(
-        witness1: Namespace,
-        witness2: Namespace,
+        witness: Namespace,
         noot: &mut Noot,
         world: &WorldRegistry,
         raw_key: vector<u8>,
@@ -260,13 +257,7 @@ module noot::noot {
         assert!(world.name == encode::type_name_ascii<Namespace>(), EWRONG_WORLD);
         assert!(check_permission(noot, ctx, UPDATE_DATA), ENO_PERMISSION);
 
-        // Copy from WorldRegistry on write
-        if (!data_store::exists_with_type<vector<u8>, Value>(&noot.data.id, raw_key)) {
-            let data = *data_store::borrow<vector<u8>, Value>(&world.id, raw_key);
-            data_store::add<vector<u8>, Value>(witness1, &mut noot.data.id, raw_key, data);
-        };
-
-        data_store::borrow_mut<vector<u8>, Value>(witness2, &mut noot.data.id, raw_key)
+        data_store::borrow_mut_with_default<Namespace, Value>(witness, &mut noot.data, raw_key, &world.data)
     }
 
     public entry fun remove_data() {
