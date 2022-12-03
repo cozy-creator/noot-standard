@@ -27,12 +27,15 @@ module utils::encode {
         output
     }
 
-    // Raw ascii strings are printed incorrectly by debug::print; utf8's are printed correctly
+    // Ascii bytes are printed incorrectly by debug::print; utf8's are printed correctly, hence
+    // we prefer utf8 strings
     public fun type_name<T>(): String {
         let ascii_name = type_name::into_string(type_name::get<T>());
         string::utf8(ascii::into_bytes(ascii_name))
     }
 
+    // addresses are 20 bytes, whereas the string-encoded version is 40 bytes.
+    // Outputted strings do not include the 0x prefix.
     public fun addr_into_string(addr: &address): String {
         let ascii_bytes = vector::empty<u8>();
 

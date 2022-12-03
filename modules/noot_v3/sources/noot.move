@@ -12,13 +12,14 @@
 module noot::noot {
     use std::vector;
     use std::ascii;
-    use sui::object::{Self, UID};
+    use sui::object::{Self, UID, ID};
     use sui::tx_context::{Self, TxContext};
     use sui::math;
-    use sui::dynamic_object_field;
     use sui::dynamic_field;
     use sui::transfer;
     use sui::coin::Coin;
+    use sui::vec_map::{Self, VecMap};
+    use utils::encode;
     use noot::inventory::{Self, Inventory};
     use noot::data_store::{Self, DataStore};
 
@@ -31,34 +32,41 @@ module noot::noot {
     // Plugins: for sale = no withdrwa from inventory, no consumption
     // For sale = no withdrawing from inventory, no consumption
     // Loaned to a friend = no withdraw from inventory, no consumption, no selling, no transfer
-    // Borrowed Against = no withdraw from inventory, no consumption, no selling (or sale must be > loan, and repay loan)
+    // Borrowed Against = no withdraw from inventory, no consumption, no selling (or sale must be > loan, and
+    // repay loan)
     // Loaded into game = no transfer, no selling
 
-    // dyanmic_field::borrow(Noot.plugins, SLOT) = does the object itself have the ability to take this action?
-    // SLOT = [ OwnerAuth, TransferAuth<Market>, MarketAuth<Market>, LienAuth, Sell_Offer]
-    const TRANSFER: u8 = 1; // wipe existing auths, create a new owner-auth. Adds a reclaim-mark
+    // These are the keys for dyanmic_field::borrow(Noot.plugins, SLOT) = 
+    // does the object itself have the ability to take this action currently?
+    // SLOT = [ TransferAuth<Market>, MarketAuth<Market> / SellOffer, LienAuth / LienReceipt, StoreAuth, Reclaimer-vector]
+    const TRANSFER: u8 = 1; // Where TransferAuth is stored
     const MARKET: u8 = 2;
     const LIEN: u8 = 3; // can use this noot as collateral
-    const MARKET_SLOT_1: u8 = 4;
-    const MARKET_SLOT_2: u8 = 5;
-    const RECLAIMERS: u8 = 6; // where the reclaim-mark vector is stored
+    const STORE_AUTH: u8 = 4;
+    const RECLAIMERS: u8 = 5; // where the reclaim-mark vector is stored
 
-    struct TransferAuth<phantom Market> has store { for: ID } // One and only one
-    struct MarketAuth<phantom Market> has store { for: ID } // One and only one
+    // Transfer = wipe all current auths, add new full-auth. Append claim-mark
+    struct TransferAuth<phantom Market> has store { for: ID } // Can be called by module-M (market)
+    struct MarketAuth<phantom Market> has store { for: ID } // Can be called by module-M (market)
     struct LienAuth has store {}
     struct StoreAuth has store {} // Noot can be unshared (stored / put into single-writer mode)
 
     // Noot.auths[user-address].permissions[SLOT] = does this user have the authority to take this action?
-    // SLOT = [ ]
-    const ADMIN: u8 = 0; // can add or remove Auths to Noot.auths
-    const CONSUME: u64 = 2; // Can deconstruct the noot
+    // SLOT = [ Owner, Consume, create-data, update-data, delete-data, deposit inventory, update inventory,
+    // withdraw inventory]
+    // Owner = must be one, and only one. Can add or remove Auths to Noot.auths.
+    // Cannot add a new owner or remove itself; must use MarketAuth or TransferAuth for that.
+    // Only Owner can transfer, sell (market), lien.
+    const OWNER: u64 = 0; 
+    const CONSUME: u64 = 1; // Can deconstruct the noot
+    const STORE: u64 = 2; // Can unshare the noot, place it in inventory or wrap it
     const CREATE_DATA: u64 = 3; // Add data item (namespaced)
-    const UPDATE_DATA: u64 = 4; // Get mutable reference to data item (namespaced)
+    const MUT_DATA: u64 = 4; // Get mutable reference to data item (namespaced)
     const DELETE_DATA: u64 = 5; // Remove data item (namespaced)
     const DEPOSIT_INVENTORY: u64 = 6;
     const MUT_INVENTORY: u64 = 7;
     const WITHDRAW_INVENTORY: u64 = 8;
-    const PERMISSION_LENGTH: u64 = 9;
+    const PERMISSION_LENGTH: u64 = 9; // how long the vec[bool] permission needs to be
     const FULL_PERMISSION: vector<bool> = vector[true, true, true, true, true, true, true, true, true];
     const NO_PERMISSION: vector<bool> = vector[false, false, false, false, false, false, false, false, false];
 
@@ -69,17 +77,13 @@ module noot::noot {
     const EWRONG_MARKET: u64 = 3;
     const ENO_TRANSFER_AUTH: u64 = 4;
     const ENOT_RENTAL_OWNER: u64 = 5;
-    const EINCORRECT_BALANCE: u64 = 6;
-    const EWRONG_VAULT: u64 = 7;
-    const EWRONG_HOT_POTATO: u64 = 8;
-    const EAUTH_OBJECT_NOT_FOUND: u64 = 9;
-    const EWRONG_WORLD: u64 = 10;
-
-    // stored object
-    struct Auth has store, drop {
-        addr: address,
-        permissions: vector<bool>
-    }
+    const EWRONG_VAULT: u64 = 6;
+    const EWRONG_HOT_POTATO: u64 = 7;
+    const EAUTH_OBJECT_NOT_FOUND: u64 = 8;
+    const EWRONG_WORLD: u64 = 9;
+    const EINSUFFICIENT_BALANCE: u64 = 10;
+    const EINCORRECT_COIN_TYPE: u64 = 11;
+    const EUNPAID_OUTSTANDING_LOAN: u64 = 12;
 
     struct Plugins has key, store {
         id: UID
@@ -101,87 +105,107 @@ module noot::noot {
     struct Noot has key, store {
         id: UID,
         world_key: WorldKey,
-        auths: vector<Auth>,
+        auths: VecMap<address, vector<bool>>,
+        quantity: u16,
         data: DataStore,
-        inventory:Inventory,
+        inventory: Inventory,
         plugins: Plugins
     }
 
     // =========== For World Authors ===============
 
-    public fun craft_noot(ctx: &mut TxContext): Noot {
+    public fun craft_noot<World: drop>(_witness: World, raw_key: vector<u8>, ctx: &mut TxContext): Noot {
+        let world_key = WorldKey {
+            world: encode::type_name_ascii<World>(),
+            raw_key
+        };
+
         Noot {
             id: object::new(ctx),
-            auths: vector::empty<Auth>(),
+            world_key,
+            auths: vec_map::empty<address, vector<bool>>(),
+            data: data_store::empty(ctx),
+            inventory: inventory::empty(ctx),
             plugins: Plugins { id: object::new(ctx) }
         }
     }
 
-    public entry fun deconstruct<W>(noot: Noot<W>) {
+    public entry fun deconstruct<World>(_witness: World, noot: Noot): Inventory {
+        assert!(dynamic_field::exists_with_type<u8, LienAuth>(&noot.plugins, LIEN), EUNPAID_OUTSTANDING_LOAN);
 
+        let Noot { id, world_key, auths: _, data, inventory, plugins } = noot;
+        object::delete(id);
+
+        // Only the world that crafted this noot can deconstruct it
+        let WorldKey { world, raw_key: _ } = world_key;
+        assert!(world == encode::type_name_ascii<World>(), EWRONG_WORLD);
+
+        // This is not properly implemented yet; will abort unless data is empty
+        data_store::destroy(data);
+
+        inventory
+    }
+
+    // TO DO: this should iterate over available plugin slots and delete them to recover storage space
+    fun destroy_plugins(plugins: Plugins) {
+        let Plugins { id } = plugins;
+        object::delete(id);
     }
 
     // =========== Switch Noot Modes ===============
     // These operations alter UID unfortunately, so UID is not stable
 
-    public entry fun share_noot<W>(noot: Noot<W>, ctx: &mut TxContext) {
-        transfer::share_object(recreate_noot(noot));
+    public entry fun share_noot(noot: Noot, ctx: &mut TxContext) {
+        transfer::share_object(recreate_noot(noot, ctx));
     }
 
-    public fun take_noot(noot: Noot<W>, ctx: &TxContext): Noot<W> {
-        assert!(check_permission(&noot, ctx, ADMIN), ENO_PERMISSION);
+    public fun take_noot(noot: Noot, ctx: &mut TxContext): Noot {
+        assert!(check_permission(&noot, ctx, OWNER), ENO_PERMISSION);
 
         // We should check for liens or claim-marks
         // We should remove any-share related plugins: auths, sell-orders
 
-        recreate_noot(noot)
+        recreate_noot(noot, ctx)
     }
 
-    public entry fun take_and_transfer_noot(noot: Noot<W>, ctx: &TxContext) {
-        transfer::transfer(take_noot_(noot, ctx), tx_context::sender(ctx));
+    public entry fun take_and_transfer_noot(noot: Noot, ctx: &mut TxContext) {
+        transfer::transfer(take_noot(noot, ctx), tx_context::sender(ctx));
     }
 
-    fun recreate_noot<W>(noot: Noot<W>): Noot<W> {
-        let Noot { id, auths, plugins } = noot;
+    fun recreate_noot(noot: Noot, ctx: &mut TxContext): Noot {
+        let Noot { id, world_key, auths, data, inventory, plugins } = noot;
         object::delete(id);
 
-        Noot<W> { id: object::new(ctx), auths, plugins}
+        Noot { id: object::new(ctx), world_key, auths, data, inventory, plugins}
     }
 
     // =========== Auth Management ===============
 
     public entry fun add_auth(noot: &mut Noot, user: address, permissions: vector<bool>, ctx: &mut TxContext) {
         assert!(vector::length(&permissions) == PERMISSION_LENGTH, EWRONG_SIZE);
-        assert!(check_permission(noot, ctx, ADMIN), ENO_PERMISSION);
+        assert!(check_permission(noot, ctx, OWNER), ENO_PERMISSION);
 
         // There can only be one owner at a time
-        assert!(!*vector::borrow(&permissions, ADMIN), EONLY_ONE_OWNER);
+        assert!(!*vector::borrow(&permissions, OWNER), EONLY_ONE_OWNER);
 
-        let (exists, i) = index_of(&noot.auths, user);
-
-        if (!exists) { 
+        if (vec_map::contains(&noot.auths, &user)) { 
             // No existing authorization found; add one
-            let authorization = Auth {
-                user,
-                permissions
-            };
-            vector::push_back(&mut noot.auths, authorization);
+            vec_map::insert(&mut noot.auths, user, permissions);
         } else {
             // Overwrites existing authorization
-            let authorization = vector::borrow_mut(&mut noot.auths, i);
-            authorization.permissions = permissions;
-        }
+            let old_permissions = vec_map::get_mut(&mut noot.auths, &user);
+            *old_permissions = permissions;
+        };
     }
 
     public entry fun remove_auth(noot: &mut Noot, user: address, ctx: &mut TxContext) {
-        assert!(check_permission(noot, ctx, ADMIN), ENO_PERMISSION);
+        assert!(check_permission(noot, ctx, OWNER), ENO_PERMISSION);
         remove_auth_internal(noot, user);
     }
 
     fun remove_auth_internal(noot: &mut Noot, user: address) {
-        let (exists, i) = index_of(&noot.auths, user);
-        if (exists) {
-            vector::remove(&mut noot.auths, i);
+        if (vec_map::contains(&noot.auths, &user)) {
+            vec_map::remove(&mut noot.auths, &user);
         }
     }
 
@@ -198,6 +222,8 @@ module noot::noot {
 
     struct HotPotato { noot_id: ID, user_addr: address, obj_addr: address }
 
+    // This needs to be thought through a little more; what if someone borrows authority with
+    // Obj; are they able to delete Obj from the auths list then?
     public fun borrow_auth<Obj: key>(
         noot: &mut Noot,
         obj: &Obj,
@@ -205,22 +231,22 @@ module noot::noot {
     ): HotPotato {
         let obj_addr = object::id_address(obj);
         let user_addr = tx_context::sender(ctx);
-        let (exists, i) = index_of(&noot.auths, obj_addr);
-        assert!(exists, EAUTH_OBJECT_NOT_FOUND);
+        assert!(vec_map::contains(&noot.auths, &obj_addr), EAUTH_OBJECT_NOT_FOUND);
 
-        *vector::borrow_mut(&mut noots.auths, i).addr = user_addr;
+        // Vec_map does not have a swap-key function...
+        let (_key, permissions) = vec_map::remove(&mut noot.auths, &obj_addr);
+        vec_map::insert(&mut noot.auths, user_addr, permissions);
 
-        HotPotato { for: object::id(noot), user_addr, obj_addr  }
+        HotPotato { noot_id: object::id(noot), user_addr, obj_addr  }
     }
 
     public fun return_auth(noot: &mut Noot, hot_potato: HotPotato) {
-        let HotPotato { for, user_addr, obj_addr } = hot_potato;
-        assert!(for == object::id(noot), EWRONG_HOT_POTATO);
+        let HotPotato { noot_id, user_addr, obj_addr } = hot_potato;
+        assert!(noot_id == object::id(noot), EWRONG_HOT_POTATO);
+        assert!(vec_map::contains(&noot.auths, &user_addr), EAUTH_OBJECT_NOT_FOUND);
 
-        let (exists, i) = index_of(&noot.auths, user_addr);
-        assert!(exists, EAUTH_OBJECT_NOT_FOUND);
-
-        *vector::borrow_mut(&mut noots.auths, i).addr = obj_addr;
+        let (_key, permissions) = vec_map::remove(&mut noot.auths, &user_addr);
+        vec_map::insert(&mut noot.auths, obj_addr, permissions);
     }
 
     // =========== Data Management ===============
@@ -233,8 +259,8 @@ module noot::noot {
         ctx: &mut TxContext
     ) {
         assert!(check_permission(noot, ctx, CREATE_DATA), ENO_PERMISSION);
-        
-        data_store::add(witness, &mut noot.data_store.id, raw_key, value);
+
+        data_store::add(witness, &mut noot.data, raw_key, value);
     }
 
     public fun borrow_data<Namespace: drop, Value: store + copy + drop>(
@@ -255,7 +281,7 @@ module noot::noot {
         ctx: &mut TxContext
     ): &mut Value {
         assert!(world.name == encode::type_name_ascii<Namespace>(), EWRONG_WORLD);
-        assert!(check_permission(noot, ctx, UPDATE_DATA), ENO_PERMISSION);
+        assert!(check_permission(noot, ctx, MUT_DATA), ENO_PERMISSION);
 
         data_store::borrow_mut_with_default<Namespace, Value>(witness, &mut noot.data, raw_key, &world.data)
     }
@@ -278,57 +304,71 @@ module noot::noot {
     // Market plugin witness
     struct RoyaltyM has drop {}
 
-    struct SellOffer<phantom C> has store, drop {
+    // This is storing an item of value, and hence cannot be dropped
+    struct SellOffer has store {
+        coin: ascii::String,
         price: u64,
         pay_to: address,
-        auth: MarketAuth<RoyaltyM>
+        market_auth: MarketAuth<RoyaltyM>
     }
 
+    // Not currently used
     struct MarketConfig {
         claims: vector<vector<u8>>
     }
 
-    public entry fun transfer<W>(noot: &mut Noot<W>, new_owner: address, claim: vector<u8>, ctx: &mut TxContext) {
-        aassert!(dynamic_field::exists_with_type<u8, MarketAuth<RoyaltyM>>(&noot.plugins.id, TRANSFER), ENO_TRANSFER_AUTH);
-        noot.auths = vector[ Auth { user: new_owner, permissions: FULL_PERMISSION }];
+    public entry fun transfer(noot: &mut Noot, new_owner: address, claim: vector<u8>, ctx: &mut TxContext) {
+        assert!(dynamic_field::exists_with_type<u8, TransferAuth<RoyaltyM>>(&noot.plugins.id, TRANSFER), ENO_TRANSFER_AUTH);
+
+        let new_auth = vec_map::empty<address, vector<bool>>();
+        vec_map::insert(&mut new_auth, new_owner, FULL_PERMISSION);
+        noot.auths = new_auth;
         
-        let claims = dynamic_field::borrow_mut<u8, vector<vector<u8>>>(&mut noot.plugins.id, MARKET_SLOT_2);
+        let claims = dynamic_field::borrow_mut<u8, vector<vector<u8>>>(&mut noot.plugins.id, RECLAIMERS);
         vector::push_back(claims, claim);
     }
 
-    public entry fun create_sell_offer<W, C>(noot: &mut Noot, price: u64, ctx: &mut TxContext) {
-        assert!(dynamic_field::exists_with_type<u8, MarketAuth<W>>(&noot.plugins.id, MarketAuth), EWRONG_MARKET);
-        let market_auth = MarketAuth<RoyaltyM> { for: object::id(noot) };
-
-        let sell_offer = SellOffer<C> {
-            id: object::new(ctx),
-            price,
-            pay_to: tx_context::sender(ctx),
-            auth: market_auth
+    // Should MarketAuth be a stamp, creating as many market-auths as it wants, or should it be
+    // a single permission object that gets removed?
+    public entry fun create_sell_offer<C>(noot: &mut Noot, price: u64, ctx: &mut TxContext) {
+        if (dynamic_field::exists_with_type<u8, SellOffer>(&noot.plugins.id, MARKET)) {
+            cancel_sell_offer(noot, ctx);
         };
 
-        // Drop existing sell offer, if any
-        if (dynamic_field::exists_with_type<u8, SellOffer<RoyaltyM>>(&noot.plugins.id, MARKET_SLOT_1)) {
-            dynamic_field::remove<u8, SellOffer<RoyaltyM>>(&mut noot.plugins.id, MARKET_SLOT_1);
-        }
+        // Should we assert that market-auth ID matches noot id as well?
+        assert!(dynamic_field::exists_with_type<u8, MarketAuth<RoyaltyM>>(&noot.plugins.id, MARKET), EWRONG_MARKET);
+
+        let market_auth = dynamic_field::remove<u8, MarketAuth<RoyaltyM>>(&mut noot.plugins.id, MARKET);
+        let sell_offer = SellOffer<C> {
+            coin: encode::type_name_ascii<Coin<C>>(),
+            price,
+            pay_to: tx_context::sender(ctx),
+            market_auth
+        };
 
         // Add new sell offer
-        dynamic_field::add(&mut noot.plugins.id, MARKET_SLOT_1, sell_offer);
+        dynamic_field::add(&mut noot.plugins.id, MARKET, sell_offer);
     }
 
-    public entry fun fill_sell_offer<W, C>(noot: &mut Noot, coin: Coin<C>, ctx: &mut TxContext) {
-        let sell_offer = dynamic_field::remove<u8, SellOffer<C>>(&mut noot.plugins.id, MARKET_SLOT_1);
-        let SellOffer { price: _, pay_to, auth: _ } = sell_offer;
-        object::delete(id);
+    public entry fun fill_sell_offer<C>(noot: &mut Noot, coin: Coin<C>, ctx: &mut TxContext) {
+        let sell_offer = dynamic_field::remove<u8, SellOffer>(&mut noot.plugins.id, MARKET);
+        let SellOffer { coin, price, pay_to, market_auth } = sell_offer;
+        dynamic_field::add(&mut noot.plugins.id, MARKET, market_auth);
 
-        // Assert coin value
+        assert!(coin == encode::type_name_ascii<Coin<C>>(), EINCORRECT_COIN_TYPE);
+        assert!(coin::value(&coin) >= price, EINSUFFICIENT_BALANCE);
         transfer::transfer(coin, pay_to);
 
         remove_claims(noot);
         noot.auths = vector[ Auth { user: tx_context::sender(ctx), permissions: FULL_PERMISSION }];
+        
     }
 
-    public entry fun cancel_sell_offer() {}
+    public entry fun cancel_sell_offer(noot: &mut Noot, ctx: &mut TxContext) {
+        let sell_offer = dynamic_field::remove<u8, SellOffer>(&mut noot.plugins.id, MARKET);
+        let SellOffer { coin: _, price: _, pay_to: _, market_auth } = sell_offer;
+        dynamic_field::add(&mut noot.plugins.id, MARKET, market_auth);
+    }
 
     public entry fun create_buy_offer() {}
 
@@ -337,8 +377,12 @@ module noot::noot {
     public entry fun cancel_buy_offer() {}
 
     // Remove outstanding claim-marks
-    fun remove_claims<W>(noot: &mut Noot<W>) {
-        *dynamic_field::borrow_mut<u8, vector<vector<u8>>(&mut noot.plugins.id, RECLAIMERS) = vector::empty<vector<u8>>();
+    fun remove_claims<W>(noot: &mut Noot) {
+        *dynamic_field::borrow_mut<u8, vector<vector<u8>>>(&mut noot.plugins.id, RECLAIMERS) = vector::empty<vector<u8>>();
+    }
+
+    public fun into_price(sell_offer: &SellOffer): (u64, ascii::String) {
+        (sell_offer.price, sell_offer.coin)
     }
 
     // ============ Rental Plugin =================
@@ -358,12 +402,12 @@ module noot::noot {
     }
 
     // Locks market-selling and lien methods
-    public entry fun create_rental_offer<C, W, M>(noot: &mut Noot<W>, price: u64, ctx: &mut TxContext) {
+    public entry fun create_rental_offer<C, M>(noot: &mut Noot, price: u64, ctx: &mut TxContext) {
         let rental_offer = RentalOffer<C, M> {
             pay_to: tx_context::sender(ctx),
             price,
-            market_auth = dynamic_field::remove<u8, MarketAuth<M>>(&mut noot.plugins.id, MARKET);
-            lien_auth = dynamic_field::remove<u8, LienAuth>(&mut noot.plugins.id, LIEN);
+            market_auth: dynamic_field::remove<u8, MarketAuth<M>>(&mut noot.plugins.id, MARKET),
+            lien_auth: dynamic_field::remove<u8, LienAuth>(&mut noot.plugins.id, LIEN),
         };
         dynamic_field::add(&mut.plugins.id, LIEN, rental_offer);
     }
@@ -372,25 +416,26 @@ module noot::noot {
 
     }
 
-    public entry fun fill_rental_offer<W, C, M>(noot: &mut Noot<W>, coin: Coin<C>, ctx: &mut TxContext) {
+    public entry fun fill_rental_offer<C, M>(noot: &mut Noot, coin: Coin<C>, ctx: &mut TxContext) {
         let rental_offer = dynamic_field::remove<u8, RentalOffer<C>>(&mut noot.plugins.id, LIEN);
-        let RentalOffer { pay_to, price: _, market_auth, lien_auth } = rental_offer;
-        // assert price
+        let RentalOffer { pay_to, price, market_auth, lien_auth } = rental_offer;
+
+        assert!(coin::value(&coin) >= price, EINSUFFICIENT_BALANCE);
         transfer::transfer(coin, pay_to);
 
         let addr = tx_context::sender(ctx);
-        noot.auths = vector[ Auth { addr, permisisons: vector[true, true, true, true, true, true, false] }];
+        noot.auths = vector[ Auth { addr, permissons: vector[true, true, true, true, true, true, false] }];
 
         let rental_receipt = RentalReceipt {
             owner: pay_to,
             market_auth,
             lien_auth,
-            reclaim_marks: *dynamic_field::borrow<u8, vector<vector<u8>>(&noot.plugins.id, RECLAIMERS)
+            reclaim_marks: *dynamic_field::borrow<u8, vector<vector<u8>>>(&noot.plugins.id, RECLAIMERS)
         };
         dynamic_field::add(&mut.plugins.id, LIEN, rental_receipt);
     }
 
-    public entry fun reclaim_rental<W, C>(noot: &mut Noot<W>, ctx: &mut TxContext) {
+    public entry fun reclaim_rental<C>(noot: &mut Noot, ctx: &mut TxContext) {
         let rental_receipt = dynamic_field::remove<u8, RentalReceipt>(&mut.plugins.id, LIEN);
         let RentalReceipt { owner, market_auth, lien_auth, reclaim_marks } = rental_receipt;
 
@@ -401,9 +446,9 @@ module noot::noot {
         dynamic_field::add(&mut noot.plugins.id, LIEN, lien_auth);
 
         // Restore the reclaim-marks to their previous state
-        *dynamic_field::borrow_mut<u8, vector<vector<u8>>(&mut noot.plugins.id, RECLAIMERS) = reclaim_marks;
+        *dynamic_field::borrow_mut<u8, vector<vector<u8>>>(&mut noot.plugins.id, RECLAIMERS) = reclaim_marks;
 
-        noot.auths = vector[ Auth { addr, permisisons: FULL_PERMISSION }];
+        noot.auths = vector[ Auth { addr, permissions: FULL_PERMISSION }];
     }
 
     // ============ Collateralized Loan Plugin =================
@@ -414,28 +459,31 @@ module noot::noot {
     }
 
     struct LienReceipt has store {
-        pay_to: address
+        pay_to: address,
         amount_owed: u64,
         lien_auth: LienAuth,
     }
 
-    public entry fun collateralize<W>(noot: &mut Noot<W>, vault: &mut Vault<C>, amount: u64, ctx: &mut TxContext) {
+    // In this noot's plugins, we swap the LienAuth for a LineReceipt
+    public entry fun collateralize(noot: &mut Noot, vault: &mut Vault<C>, amount: u64, ctx: &mut TxContext) {
         let addr = tx_context::sender(ctx);
         let coin = coin::split(&mut vault.coins, amount, ctx);
         transfer::transfer(coin, addr);
 
-        let LienReceipt = {
+        let lein_receipt = LienReceipt {
             pay_to: object::id(vault),
             amount_owed: amount,
             lien_auth: dynamic_field::remove<u8, LienAuth>(&mut noot.plugins.id, LIEN)
         };
+
+        dynamic_field::add<u8, LienReceipt>(&mut noot.plugins.id, LIEN, lein_receipt);
     }
 
-    public entry fun pay_back_loan<C, W>(noot: &mut Noot<W>, vault: &mut Vault<C>, coin: Coin<C>, ctx: &mut TxContext) {
+    public entry fun pay_back_loan<C>(noot: &mut Noot, vault: &mut Vault<C>, coin: Coin<C>, ctx: &mut TxContext) {
         let lien_receipt = dynamic_field::remove<u8, LienReceipt>(&mut noot.plugins.id, LIEN);
         let LienReceipt { pay_to, amount_owed, lien_auth };
 
-        assert!(coin::balance(&coin) >= amount_owed, EINCORRECT_BALANCE);
+        assert!(coin::balance(&coin) >= amount_owed, EINSUFFICIENT_BALANCE);
         assert!(object::id(vault) == pay_to, EWRONG_VAULT);
         coin::join(&mut vault.coins, coin);
 
@@ -443,17 +491,17 @@ module noot::noot {
     }
 
     // Anyone with the funds to repay the loan can repo
-    public entry fun repo_noot<C, W>(noot: &mut Noot<W>, vault: &mut Vault<C>, coin: Coin<C>, ctx: &mut TxContext) {
+    public entry fun repo_noot<C>(noot: &mut Noot, vault: &mut Vault<C>, coin: Coin<C>, ctx: &mut TxContext) {
         pay_back_loan(noot, vault, coin, ctx);
 
         // Take full possession of the noot 
         remove_claims(noot);
-        noot.auths = vector[ Auth { tx_context::sender(ctx), permisisons: FULL_PERMISSION }];
+        noot.auths = vector[ Auth { addr: tx_context::sender(ctx), permisisons: FULL_PERMISSION }];
     }
 
     // ============ Permission Checker Functions =================
 
-    public fun check_permission(noot: &Noot, ctx: &mut TxContext, index: u64): bool {
+    public fun check_permission(noot: &Noot, ctx: &TxContext, index: u64): bool {
         let addr = tx_context::sender(ctx);
         let (exists, i) = index_of(&noot.auths, addr);
         if (!exists) { false }

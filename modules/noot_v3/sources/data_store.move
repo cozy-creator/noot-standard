@@ -37,16 +37,7 @@ module noot::data_store {
         raw_key: vector<u8>,
         value: Value
     ) {
-        add_internal(data_store, raw_key, value);
-    }
-
-    public fun add_and_borrow_mut<Namespace: drop, Value: store + copy + drop>(
-        _witness: Namespace,
-        data_store: &mut DataStore,
-        raw_key: vector<u8>,
-        value: Value
-    ): &mut Value {
-        add_internal(data_store, raw_key, value);
+        add_internal<Namespace, Value>(data_store, raw_key, value);
     }
 
     // Used internally to bypass the `witness` requirement
@@ -55,9 +46,9 @@ module noot::data_store {
         raw_key: vector<u8>,
         value: Value
     ) {
-        add_to_index<Namespace>(inventory, raw_key);
+        add_to_index<Namespace>(data_store, raw_key);
         let key = into_key<Namespace>(&raw_key);
-        dynamic_field::add(&mut inventory.id, key, value);
+        dynamic_field::add(&mut data_store.id, key, value);
     }
 
     /// Aborts with `EITEM_DOES_NOT_EXIST` if the object does not have a field with that name.
@@ -153,7 +144,7 @@ module noot::data_store {
     ): &mut Value { 
         if (!exists_with_type<Namespace, Value>(data_store, raw_key)) {
             let value = *borrow<Namespace, Value>(default_data, raw_key);
-            add_internal(data_store, raw_key, value);
+            add_internal<Namespace, Value>(data_store, raw_key, value);
         };
 
         borrow_mut<Namespace, Value>(witness, data_store, raw_key)
@@ -166,13 +157,14 @@ module noot::data_store {
         data_store: &DataStore,
         raw_key: vector<u8>,
     ): bool {
-        let key = into_key<Namespace>(&raw_key);
-        dynamic_field::exists_(&data_store.id, key)
+        let index = index<Namespace>(data_store);
+        let (exists, i) = vector::index_of(&index, &raw_key);
+        exists
     }
 
     /// Returns true if and only if the `data_store` has a dynamic field with the name specified by
     /// `key: vector<u8>` with an assigned value of type `Value`.
-    public fun <Namespace, Value><data_store, raw_keyNamespace: drop, Value: store + copy + drop>(
+    public fun exists_with_type<Namespace: drop, Value: store + copy + drop>(
         data_store: &DataStore,
         raw_key: vector<u8>,
     ): bool {
@@ -199,7 +191,7 @@ module noot::data_store {
         index_(data_store, namespace)
     }
 
-    public fun index_(data_store: &DataStore, namespace: &ascii::String): vector<vector<u8>> {
+    public fun index_(data_store: &DataStore, namespace: ascii::String): vector<vector<u8>> {
         let (exists, i) = vector::index_of(&data_store.namespaces, &namespace);
         if (!exists) {
             vector::empty()
@@ -221,7 +213,7 @@ module noot::data_store {
 
     public fun size_<Namespace>(data_store: &DataStore): u64 {
         let index = index<Namespace>(data_store);
-        vector::length(index)
+        vector::length(&index)
     }
 
     // Takes an `DataStore`, removes the namespaced portion specified, attaches that namespace to a new data_store,
@@ -277,8 +269,9 @@ module noot::data_store {
 
     // We enforce a 'zero emissions' policy of leaving now wasted data behind. Because every item in a
     // data store has 'drop', we can enumerate through and drop all of them
+    // TO DO: implement this such that we can iterate over all data and drop it
     public entry fun destroy(data_store: DataStore) {
-        let DataStore { id, namespaces, index: _ } = inventory;
+        let DataStore { id, namespaces, index: _ } = data_store;
         assert!(vector::length(&namespaces) == 0, EINVENTORY_NOT_EMPTY);
         object::delete(id);
     }

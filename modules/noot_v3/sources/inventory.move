@@ -1,3 +1,7 @@
+// TO DO: Coins should be placed in a protected location:
+// Withdraw-privileges required in order to remove coins from inventory
+// Deposit-priviliges required in order to add coins
+
 module noot::inventory {
     use sui::dynamic_object_field;
     use sui::object::{Self, UID};

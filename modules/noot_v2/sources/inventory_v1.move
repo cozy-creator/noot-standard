@@ -32,7 +32,7 @@
 // Maybe in the future, the index could also store the types of the values as well, once type
 // introspection is possible.
 
-module noot::inventory_old {
+module noot::inventory_v1 {
     use sui::dynamic_object_field;
     use sui::object::{Self, UID};
     use sui::tx_context::{TxContext};
