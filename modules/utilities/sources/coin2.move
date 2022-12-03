@@ -29,7 +29,7 @@ module utils::coin2 {
         };
     }
     
-    public entry fun refund_balance<T>(balance: Balance<T>, ctx: &mut TxContext) {
+    public fun refund_balance<T>(balance: Balance<T>, ctx: &mut TxContext) {
         if (balance::value(&balance) > 0) {
             transfer::transfer(coin::from_balance(balance, ctx), tx_context::sender(ctx));
         } else {

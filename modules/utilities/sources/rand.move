@@ -50,6 +50,13 @@ module utils::rand {
         let quotient = x / divisor;
         x - (quotient * divisor)
     }
+
+    public fun mod_u8(x: u8, divisor: u8): u8 {
+        assert!(divisor > 0, EDIVISOR_MUST_BE_NON_ZERO);
+
+        let quotient = x / divisor;
+        x - (quotient * divisor)
+    }
 }
 
 #[test_only]
