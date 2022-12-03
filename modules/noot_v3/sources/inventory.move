@@ -7,7 +7,7 @@ module noot::inventory {
     use sui::object::{Self, UID};
     use sui::tx_context::{TxContext};
     use std::vector;
-    use std::ascii::{Self, String};
+    use std::string::{Self, String};
     use std::hash;
     use std::option::{Self, Option};
     use utils::encode;
@@ -151,10 +151,10 @@ module noot::inventory {
     }
 
     public fun namespace_exists<Namespace>(inventory: &Inventory): bool {
-        vector::contains(&inventory.namespaces, &encode::type_name_ascii<Namespace>())
+        vector::contains(&inventory.namespaces, &encode::type_name<Namespace>())
     }
 
-    public fun namespace_exists_(inventory: &Inventory, namespace: &ascii::String): bool {
+    public fun namespace_exists_(inventory: &Inventory, namespace: &String): bool {
         vector::contains(&inventory.namespaces, namespace)
     }
 
@@ -165,12 +165,12 @@ module noot::inventory {
 
     // Retrieves the index for the specified namespace so that it can be enumerated over
     public fun index<Namespace>(inventory: &Inventory): vector<vector<u8>> {
-        let namespace = encode::type_name_ascii<Namespace>();
-        index(inventory, namespace)
+        let namespace = encode::type_name<Namespace>();
+        index_(inventory, &namespace)
     }
 
-    public fun index_(inventory: &Inventory, namespace: &ascii::String): vector<vector<u8>> {
-        let (exists, i) = vector::index_of(&inventory.namespaces, &namespace);
+    public fun index_(inventory: &Inventory, namespace: &String): vector<vector<u8>> {
+        let (exists, i) = vector::index_of(&inventory.namespaces, namespace);
         if (!exists) {
             vector::empty()
         } else {
@@ -191,7 +191,7 @@ module noot::inventory {
 
     public fun size_<Namespace>(inventory: &Inventory): u64 {
         let index = index<Namespace>(inventory);
-        vector::length(index)
+        vector::length(&index)
     }
 
     // Takes an `Inventory`, removes the namespaced portion specified, attaches that namespace to a new inventory,
@@ -240,8 +240,8 @@ module noot::inventory {
     // Keys = hash(namespace + | + raw_key (as bytes))
     // The hash keeps the keys all a constant size, regardless of the length of the namespace or raw_key
     public fun into_key<Namespace: drop>(raw_key: &vector<u8>): vector<u8> {
-        let namespace = encode::type_name_ascii<Namespace>();
-        let key_preimage = ascii::into_bytes(namespace);
+        let namespace = encode::type_name<Namespace>();
+        let key_preimage = *string::bytes(&namespace);
         // prevents collisions caused by a namespace that is a prefix of another namespace
         vector::push_back(&mut key_preimage, 124u8);
         vector::append(&mut key_preimage, *raw_key);
@@ -251,7 +251,7 @@ module noot::inventory {
     // === Internal functions ===
 
     fun add_to_index<Namespace>(inventory: &mut Inventory, raw_key: vector<u8>) {
-        let namespace = encode::type_name_ascii<Namespace>();
+        let namespace = encode::type_name<Namespace>();
         let (exists, i) = vector::index_of(&inventory.namespaces, &namespace);
 
         // If this namespace doesn't exist yet, we create it now
@@ -267,7 +267,7 @@ module noot::inventory {
     }
 
     fun remove_from_index<Namespace>(inventory: &mut Inventory, raw_key: vector<u8>) {
-        let namespace = encode::type_name_ascii<Namespace>();
+        let namespace = encode::type_name<Namespace>();
         let (exists, i) = vector::index_of(&inventory.namespaces, &namespace);
 
         assert!(exists, ENAMESPACE_DOES_NOT_EXIST);

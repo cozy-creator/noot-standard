@@ -3,7 +3,7 @@ module noot::data_store {
     use sui::object::{Self, UID};
     use sui::tx_context::{TxContext};
     use std::vector;
-    use std::ascii::{Self, String};
+    use std::string::{Self, String};
     use std::hash;
     use std::option::{Self, Option};
     use utils::encode;
@@ -76,7 +76,7 @@ module noot::data_store {
     // of time, even though it already has 'drop' and we're just dropping it.
     // fun drop(
     //     data_store: &mut DataStore,
-    //     namespace: ascii::String,
+    //     namespace: String,
     //     raw_key: vector<u8>
     // ) {
     //     dynamic_field::drop()
@@ -158,7 +158,7 @@ module noot::data_store {
         raw_key: vector<u8>,
     ): bool {
         let index = index<Namespace>(data_store);
-        let (exists, i) = vector::index_of(&index, &raw_key);
+        let (exists, _i) = vector::index_of(&index, &raw_key);
         exists
     }
 
@@ -173,10 +173,10 @@ module noot::data_store {
     }
 
     public fun namespace_exists<Namespace>(data_store: &DataStore): bool {
-        vector::contains(&data_store.namespaces, &encode::type_name_ascii<Namespace>())
+        vector::contains(&data_store.namespaces, &encode::type_name<Namespace>())
     }
 
-    public fun namespace_exists_(data_store: &DataStore, namespace: &ascii::String): bool {
+    public fun namespace_exists_(data_store: &DataStore, namespace: &String): bool {
         vector::contains(&data_store.namespaces, namespace)
     }
 
@@ -187,11 +187,11 @@ module noot::data_store {
 
     // Retrieves the index for the specified namespace so that it can be enumerated over
     public fun index<Namespace>(data_store: &DataStore): vector<vector<u8>> {
-        let namespace = encode::type_name_ascii<Namespace>();
+        let namespace = encode::type_name<Namespace>();
         index_(data_store, namespace)
     }
 
-    public fun index_(data_store: &DataStore, namespace: ascii::String): vector<vector<u8>> {
+    public fun index_(data_store: &DataStore, namespace: String): vector<vector<u8>> {
         let (exists, i) = vector::index_of(&data_store.namespaces, &namespace);
         if (!exists) {
             vector::empty()
@@ -279,8 +279,8 @@ module noot::data_store {
     // Keys = hash(namespace + | + raw_key (as bytes))
     // The hash keeps the keys all a constant size, regardless of the length of the namespace or raw_key
     public fun into_key<Namespace: drop>(raw_key: &vector<u8>): vector<u8> {
-        let namespace = encode::type_name_ascii<Namespace>();
-        let key_preimage = ascii::into_bytes(namespace);
+        let namespace = encode::type_name<Namespace>();
+        let key_preimage = *string::bytes(&namespace);
         // prevents collissions caused by a namespace that is a prefix of another namespace
         vector::push_back(&mut key_preimage, 124u8);
         vector::append(&mut key_preimage, *raw_key);
@@ -290,7 +290,7 @@ module noot::data_store {
     // === Internal functions ===
 
     fun add_to_index<Namespace>(data_store: &mut DataStore, raw_key: vector<u8>) {
-        let namespace = encode::type_name_ascii<Namespace>();
+        let namespace = encode::type_name<Namespace>();
         let (exists, i) = vector::index_of(&data_store.namespaces, &namespace);
 
         // If this namespace doesn't exist yet, we create it now
@@ -306,7 +306,7 @@ module noot::data_store {
     }
 
     fun remove_from_index<Namespace>(data_store: &mut DataStore, raw_key: vector<u8>) {
-        let namespace = encode::type_name_ascii<Namespace>();
+        let namespace = encode::type_name<Namespace>();
         let (exists, i) = vector::index_of(&data_store.namespaces, &namespace);
 
         assert!(exists, ENAMESPACE_DOES_NOT_EXIST);
