@@ -22,6 +22,7 @@ module noot::noot {
     use utils::encode;
     use noot::inventory::{Self, Inventory};
     use noot::data_store::{Self, DataStore};
+    use metadata::metadata::{Self, Metadata};
 
     // enums to specify the vector index for each corresponding permission
     // There must be one, and only one, owner at a time.
@@ -84,12 +85,13 @@ module noot::noot {
     const EINSUFFICIENT_BALANCE: u64 = 10;
     const EINCORRECT_COIN_TYPE: u64 = 11;
     const EUNPAID_OUTSTANDING_LOAN: u64 = 12;
+    const EBAD_WITNESS: u64 = 13;
 
     struct Plugins has key, store {
         id: UID
     }
 
-    struct WorldRegistry<phantom Genesis> has key, store {
+    struct WorldConfig<phantom Genesis> has key, store {
         id: UID,
         world: String, // witness type string
         data: DataStore
@@ -116,16 +118,19 @@ module noot::noot {
 
     public fun create_world<GENESIS: drop, World: drop>(
         one_time_witness: GENESIS,
-        witness: World,
+        _witness: World,
         ctx: &mut TxContext
-    ): WorldRegistry<World> {
+    ): (WorldConfig<GENESIS>, Metadata<GENESIS>) {
         assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
+        let metadata = metadata::create(one_time_witness, ctx);
 
-        WorldRegistry<GENESIS> {
+        let world_config = WorldConfig<GENESIS> {
             id: object::new(ctx),
             world: encode::type_name<World>(),
-            display: vec_map::empty<String, String>()
-        }
+            data: data_store::empty(ctx)
+        };
+
+        (world_config, metadata)
     }
 
     public fun craft_noot<World: drop>(_witness: World, raw_key: vector<u8>, ctx: &mut TxContext): Noot {
@@ -285,9 +290,9 @@ module noot::noot {
         data_store::add(witness, &mut noot.data, raw_key, value);
     }
 
-    public fun borrow_data<World: drop, Value: store + copy + drop>(
+    public fun borrow_data<G, World: drop, Value: store + copy + drop>(
         noot: &Noot, 
-        world_config: &WorldRegistry, 
+        world_config: &WorldConfig<G>, 
         raw_key: vector<u8>
     ): &Value {
         assert!(world_config.world == encode::type_name<World>(), EWRONG_WORLD);
@@ -295,10 +300,10 @@ module noot::noot {
         data_store::borrow_with_default<World, Value>(&noot.data, raw_key, &world_config.data)
     }
 
-    public fun borrow_data_mut<World: drop, Value: store + copy + drop>(
+    public fun borrow_data_mut<G, World: drop, Value: store + copy + drop>(
         witness: World,
         noot: &mut Noot,
-        world_config: &WorldRegistry,
+        world_config: &WorldConfig<G>,
         raw_key: vector<u8>,
         ctx: &mut TxContext
     ): &mut Value {

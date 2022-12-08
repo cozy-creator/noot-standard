@@ -5,8 +5,10 @@ version = "0.1.0"
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework", rev = "devnet" }
 NootStandard = { local = "../noot_v3" }
+SuiMetadata = { local = "../metadata" }
 
 [addresses]
 noot_examples = "0x0"
-noot =  "0x3"
+noot =  "0x5"
+metadata = "0x4"
 sui = "0x2"
