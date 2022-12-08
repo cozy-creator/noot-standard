@@ -1,0 +1,12 @@
+[package]
+name = "SuiMetadata"
+version = "0.1.0"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework", rev = "devnet" }
+SuiUtils = { local = "../utilities" }
+
+[addresses]
+metadata =  "0x0"
+utils = "0x3"
+sui = "0x2"

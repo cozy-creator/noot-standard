@@ -9,6 +9,8 @@ module utils::encode {
     use sui::bcs;
     use utils::rand;
 
+    const EINVALID_TYPE_NAME: u64 = 0;
+
     // This will fail if there is an odd number of entries in the first vector
     // It will also fail if the bytes are not utf8 strings
     public fun to_string_string_vec_map(bytes: &vector<vector<u8>>): VecMap<String, String> {
@@ -28,10 +30,47 @@ module utils::encode {
     }
 
     // Ascii bytes are printed incorrectly by debug::print; utf8's are printed correctly, hence
-    // we prefer utf8 strings
+    // we skip using ascii's and go straight to utf8's. Ascii is a subset of Utf8.
+    // The string returned is the fully-qualified type, with no abbreviations or 0x appended to addresses,
+    // Exmaples:
+    // 0000000000000000000000000000000000000002::devnet_nft::DevNetNFT
+    // 0000000000000000000000000000000000000002::coin::Coin<0000000000000000000000000000000000000002::sui::SUI>
+    // 0000000000000000000000000000000000000001::string::String
     public fun type_name<T>(): String {
         let ascii_name = type_name::into_string(type_name::get<T>());
         string::utf8(ascii::into_bytes(ascii_name))
+    }
+
+    public fun type_name_<T>(): (String, String, String) {
+        decompose_type_name(type_name<T>())
+    }
+
+    // Accepts a full-qualified type-string and decomposes it into (address, module name, type name).
+    // Example:
+    // (0000000000000000000000000000000000000002, devnet_nft, DevNetNFT)
+    // Aborts if the string does not conform to the `address::module::type` format
+    public fun decompose_type_name(s1: String): (String, String, String) {
+        let delimiter = string::utf8(b"::");
+
+        let i = string::index_of(&s1, &delimiter);
+        assert!(string::length(&s1) > i, EINVALID_TYPE_NAME);
+        let module_addr = string::sub_string(&s1, 0, i);
+
+        let s2 = string::sub_string(&s1, i + 2, string::length(&s1));
+        let j = string::index_of(&s2, &delimiter);
+        assert!(string::length(&s2) > j, EINVALID_TYPE_NAME);
+        let module_name = string::sub_string(&s2, 0, j);
+
+        let type_name = string::sub_string(&s2, j + 2, string::length(&s2));
+
+        (module_addr, module_name, type_name)
+    }
+
+    public fun is_same_module<Type1, Type2>(): bool {
+        let (addr1, module1, _) = type_name_<Type1>();
+        let (addr2, module2, _) = type_name_<Type2>();
+
+        (addr1 == addr2 && module1 == module2)
     }
 
     // addresses are 20 bytes, whereas the string-encoded version is 40 bytes.
@@ -67,52 +106,74 @@ module utils::encode {
 module utils::encode_test {
     use std::debug;
     use sui::test_scenario;
-    use utils::encode;
-    use sui::object;
     use std::string;
+    use sui::object;
     use sui::bcs;
-    use std::ascii;
-
-    #[test]
-    public fun test1() {
-        let scenario = test_scenario::begin(@0x5);
-        let ctx = test_scenario::ctx(&mut scenario);
-        {
-            let uid = object::new(ctx);
-            let addr = object::uid_to_address(&uid);
-            let string = encode::addr_into_ascii(&addr);
-            debug::print(&string);
-            object::delete(uid);
-        };
-        test_scenario::end(scenario);
-    }
+    use sui::coin::{Self, Coin};
+    use sui::sui::SUI;
+    use utils::encode;
 
     // bcs bytes != utf8 bytes
     #[test]
     #[expected_failure]
-    public fun test2() {
+    public fun bcs_is_not_utf8() {
         let scenario = test_scenario::begin(@0x5);
         let ctx = test_scenario::ctx(&mut scenario);
         {
             let uid = object::new(ctx);
             let addr = object::uid_to_address(&uid);
-            debug::print(&string::utf8(bcs::to_bytes(&addr)));
+            let addr_string = string::utf8(bcs::to_bytes(&addr));
+            debug::print(&addr_string);
             object::delete(uid);
         };
         test_scenario::end(scenario);
     }
 
-    // bcs bytes != ascii bytes
     #[test]
-    #[expected_failure]
-    public fun test3() {
+    public fun addr_into_string() {
         let scenario = test_scenario::begin(@0x5);
         let ctx = test_scenario::ctx(&mut scenario);
         {
             let uid = object::new(ctx);
             let addr = object::uid_to_address(&uid);
-            debug::print(&ascii::string(bcs::to_bytes(&addr)));
+            let string = encode::addr_into_string(&addr);
+            assert!(string::utf8(b"fdc6d587c83a348e456b034e1e0c31e9a7e1a3aa") == string, 0);
             object::delete(uid);
+        };
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    public fun decompose_sui_coin_type_name() {
+        let scenario = test_scenario::begin(@0x77);
+        let _ctx = test_scenario::ctx(&mut scenario);
+        {
+            let name = encode::type_name<Coin<SUI>>();
+            let (addr, mod, type) = encode::decompose_type_name(name);
+            assert!(string::utf8(b"0000000000000000000000000000000000000002") == addr, 0);
+            assert!(string::utf8(b"coin") == mod, 0);
+            assert!(string::utf8(b"Coin<0000000000000000000000000000000000000002::sui::SUI>") == type, 0);
+        };
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    public fun match_modules() {
+        let scenario = test_scenario::begin(@0x420);
+        let _ctx = test_scenario::ctx(&mut scenario);
+        {
+            assert!(encode::is_same_module<coin::Coin<SUI>, coin::TreasuryCap<SUI>>(), 0);
+            assert!(!encode::is_same_module<bcs::BCS, object::ID>(), 0);
+        };
+        test_scenario::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 0)]
+    public fun invalid_string() {
+        let scenario = test_scenario::begin(@0x69);
+        {
+            let (_addr, _mod, _type) = encode::decompose_type_name(string::utf8(b"123456"));
         };
         test_scenario::end(scenario);
     }

@@ -89,7 +89,7 @@ module noot::noot {
         id: UID
     }
 
-    struct WorldRegistry has key, store {
+    struct WorldRegistry<phantom Genesis> has key, store {
         id: UID,
         world: String, // witness type string
         data: DataStore
@@ -113,6 +113,20 @@ module noot::noot {
     }
 
     // =========== For World Authors ===============
+
+    public fun create_world<GENESIS: drop, World: drop>(
+        one_time_witness: GENESIS,
+        witness: World,
+        ctx: &mut TxContext
+    ): WorldRegistry<World> {
+        assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
+
+        WorldRegistry<GENESIS> {
+            id: object::new(ctx),
+            world: encode::type_name<World>(),
+            display: vec_map::empty<String, String>()
+        }
+    }
 
     public fun craft_noot<World: drop>(_witness: World, raw_key: vector<u8>, ctx: &mut TxContext): Noot {
         let world_key = WorldKey {
