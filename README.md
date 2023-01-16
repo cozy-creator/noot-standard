@@ -1,4 +1,4 @@
-### Deprecated Repo Notice
+# DEPRECATED
 
 This repo has been deprecated; we've rebraned as [Capsules](https://github.com/0xcapsules/capsules), which are effectively Noots v6.0.
 
