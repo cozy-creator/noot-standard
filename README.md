@@ -4,6 +4,8 @@ This repo has been deprecated; we've rebraned as [Capsules](https://github.com/0
 
 We'll still be keeping this repo live for historic purposes though; lots of fun half-baked nonsense ideas in here!
 
+---
+
 **Noot:** a programmable unit of ownership. (plural: noots)
 
 ### Why We Built This
