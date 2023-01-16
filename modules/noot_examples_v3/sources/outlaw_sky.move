@@ -21,10 +21,19 @@ module noot_examples::outlaw_sky {
         homepage: Option<String>
     }
 
+    public fun craft() {
+
+    }
+
+    // =========== Admin Functions ===========
+
     fun init(one_time_witness: OUTLAW_SKY, ctx: &mut TxContext) {
         let addr = tx_context::sender(ctx);
-        let (world_config, metadata) = noot::create_world(one_time_witness, Outlaw_Sky {}, ctx);
+        let craft_cap = noot::create_world(one_time_witness, Outlaw_Sky {}, ctx);
+        noot::destroy_craft_cap(craft_cap);
+    }
 
+    public entry fun set_metadata(metadata: &mut Metadata<OUTLAW_SKY>, _project-bytes: vector<u8>) {
         let project_data = ProjectData {
             name: utf8(b"Outlaw Sky"),
             description: utf8(b"Welcome to the meta future"),
@@ -32,13 +41,7 @@ module noot_examples::outlaw_sky {
             interface: option::none<String>(),
             homepage: option::some(utf8(b"https://twitter.com/outlaw_sky"))
         };
-        metadata::add_type<OUTLAW_SKY, OUTLAW_SKY, ProjectData>(&mut metadata, project_data);
 
-        transfer::transfer(world_config, addr);
-        transfer::transfer(metadata, addr);
-    }
-
-    public fun craft() {
-
+        metadata::add_type<OUTLAW_SKY, OUTLAW_SKY, ProjectData>(metadata, project_data);
     }
 }

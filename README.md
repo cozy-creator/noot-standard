@@ -1,4 +1,8 @@
-![Move_VM](./static/move_vm_factory.png 'Sui Move Factory')
+### Deprecated Repo Notice
+
+This repo has been deprecated; we've rebraned as [Capsules][https://github.com/0xcapsules/capsules], which are effectively Noots v6.0.
+
+We'll still be keeping this repo live for historic purposes though; lots of fun half-baked nonsense ideas in here!
 
 **Noot:** a programmable unit of ownership. (plural: noots)
 

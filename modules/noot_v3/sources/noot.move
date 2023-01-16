@@ -91,22 +91,22 @@ module noot::noot {
         id: UID
     }
 
+    // Capability used to craft noots from world Genesis
+    struct CraftCap<phantom Genesis> has key { id: UID }
+
+    // An immutable record that links types A and B
+    struct Link<phantom A, phantom B> has key { id: UID }
+
     struct WorldConfig<phantom Genesis> has key, store {
         id: UID,
-        world: String, // witness type string
+        owner: address,
         data: DataStore
     }
 
-    struct WorldKey has store {
-        world: String, // witness type string
-        raw_key: vector<u8>
-    }
-
     // Can be single-writer, shared, or stored
-    // We could potentially add a second UID, a stable UID, since this id can change
     struct Noot has key, store {
-        id: UID,
-        world_key: WorldKey,
+        id: UID, // We could potentially add a second UID, a stable UID, since this id can change
+        type_name: String, // <package_id>::<module_name>::<struct_name>
         auths: VecMap<address, vector<bool>>,
         quantity: u16,
         data: DataStore,
@@ -116,32 +116,65 @@ module noot::noot {
 
     // =========== For World Authors ===============
 
-    public fun create_world<GENESIS: drop, World: drop>(
-        one_time_witness: GENESIS,
-        _witness: World,
+    // Creation authority is tied to a witness type and also a CraftCap
+    public fun create_world<GENESIS: drop, Witness: drop>: CraftCap<GENESIS>(
+        genesis: GENESIS,
+        _witness: Witness,
         ctx: &mut TxContext
-    ): (WorldConfig<GENESIS>, Metadata<GENESIS>) {
-        assert!(sui::types::is_one_time_witness(&one_time_witness), EBAD_WITNESS);
-        let metadata = metadata::create(one_time_witness, ctx);
+    ) {
+        transfer::freeze_object(Link<GENESIS, Witness> { id: object::new(ctx) });
+        
+        create_world_(genesis, ctx)
+    }
+
+    // Creation authority is tied strictly to a CraftCap; no witness authority provided
+    public fun create_world_<GENESIS: drop>(genesis: GENESIS, ctx: &mut TxContext): CraftCap<GENESIS> {
+        assert!(sui::types::is_one_time_witness(&genesis), EBAD_WITNESS);
 
         let world_config = WorldConfig<GENESIS> {
             id: object::new(ctx),
-            world: encode::type_name<World>(),
+            owner: tx_context::sender(ctx),
             data: data_store::empty(ctx)
         };
+        transfer::share_object(world_config);
 
-        (world_config, metadata)
+        metadata::create(genesis, ctx);
+
+        CraftCap { id: object::new(ctx) }
     }
 
-    public fun craft_noot<World: drop>(_witness: World, raw_key: vector<u8>, ctx: &mut TxContext): Noot {
-        let world_key = WorldKey {
-            world: encode::type_name<World>(),
-            raw_key
-        };
+    // This action cannot be undone. Unless a witness-type was linked with GENESIS, destroying a craft_cap
+    //  makes it impossible for more noots belonging to GENESIS to ever be crafted again. 
+    public fun destroy_craft_cap<GENESIS>(craft_cap: CraftCap<GENESIS>) {
+        let CraftCap { id } = craft_cap;
+        object::delete(id);
+    }
+
+    // Authorize using a CraftCap
+    public fun craft<Genesis: drop>(
+        _cap: &CraftCap<Genesis>,
+        struct_name: String,
+        ctx: &mut TxContext
+    ): Noot {
+        craft_internal<Genesis>(struct_name, ctx)
+    }
+
+    // Authorize using a witness and a link that proves the Genesis and the Witness were linked
+    public fun craft_<Genesis: drop, Witness: drop>(
+        _witness: Witness,
+        _link: &Link<Genesis, Witness>,
+        struct_name: String,
+        ctx: &mut TxContext
+    ): Noot {
+        craft_internal<Genesis>(struct_name, ctx)
+    }
+
+    fun craft_internal<Genesis: drop>(struct_name: String, ctx: &mut TxContext): Noot {
+        let type_name = encode::append_struct_name<G>(struct_name);
 
         Noot {
             id: object::new(ctx),
-            world_key,
+            type_name: module_addr,
             auths: vec_map::empty<address, vector<bool>>(),
             quantity: 1,
             data: data_store::empty(ctx),
@@ -153,12 +186,11 @@ module noot::noot {
     public fun deconstruct<World: drop>(_witness: World, noot: Noot): Inventory {
         assert!(dynamic_field::exists_with_type<u8, LienAuth>(&noot.plugins.id, LIEN), EUNPAID_OUTSTANDING_LOAN);
 
-        let Noot { id, world_key, auths: _, quantity: _, data, inventory, plugins } = noot;
+        let Noot { id, witness, type_name: _, auths: _, quantity: _, data, inventory, plugins } = noot;
         object::delete(id);
 
         // Only the world that crafted this noot can deconstruct it
-        let WorldKey { world, raw_key: _ } = world_key;
-        assert!(world == encode::type_name<World>(), EWRONG_WORLD);
+        assert!(witness == encode::type_name<World>(), EWRONG_WORLD);
 
         // This is not properly implemented yet; will abort unless data is empty
         data_store::destroy(data);
@@ -293,11 +325,11 @@ module noot::noot {
     public fun borrow_data<G, World: drop, Value: store + copy + drop>(
         noot: &Noot, 
         world_config: &WorldConfig<G>, 
-        raw_key: vector<u8>
+        type_name: String
     ): &Value {
-        assert!(world_config.world == encode::type_name<World>(), EWRONG_WORLD);
+        assert!(world_config.witness == encode::type_name<World>(), EWRONG_WORLD);
 
-        data_store::borrow_with_default<World, Value>(&noot.data, raw_key, &world_config.data)
+        data_store::borrow_with_default<World, Value>(&noot.data, type_name, &world_config.data)
     }
 
     public fun borrow_data_mut<G, World: drop, Value: store + copy + drop>(
@@ -318,9 +350,22 @@ module noot::noot {
     }
 
     // =========== View Functions ===============
-    // Used by external processes to deserialize names, descriptions, images, files, etc.
+    // Used by clients to fetch display data: names, descriptions, images, files, etc.
 
+    // Note that Metadata<World> need not be from the same world as the Noot; we allow for foreign
+    // worlds to define metadata for objects from external worlds
+    //
+    // This looks for data of type D for the specified Noot, for the specified World
+    public fun view<Data: store + drop, World: drop>(noot: &Noot, metadata: &Metadata<World>): &Data {
+        let key = encode::type_name<World>();
+        string::append(&mut key, encode::type_name<Data>());
 
+        if (dynamic_field::exists_with_type<String, Data>(&noot.id, key)) {
+            dynamic_field::borrow<String, Data>(&noot.id, key)
+        } else {
+            metadata::borrow_type_<G, Data>(metadata, noot.struct_name)
+        }
+    }
 
     // ============ Inventory Management =================
 

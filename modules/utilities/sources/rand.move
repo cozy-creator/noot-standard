@@ -28,7 +28,7 @@ module utils::rand {
         object::delete(uid);
 
         let num = from_bytes(bytes);
-        mod(num, max - min) + min
+        num % (max - min) + min
     }
 
     public fun from_bytes(bytes: vector<u8>): u64 {
@@ -42,20 +42,6 @@ module utils::rand {
         };
 
         sum
-    }
-
-    public fun mod(x: u64, divisor: u64): u64 {
-        assert!(divisor > 0, EDIVISOR_MUST_BE_NON_ZERO);
-
-        let quotient = x / divisor;
-        x - (quotient * divisor)
-    }
-
-    public fun mod_u8(x: u8, divisor: u8): u8 {
-        assert!(divisor > 0, EDIVISOR_MUST_BE_NON_ZERO);
-
-        let quotient = x / divisor;
-        x - (quotient * divisor)
     }
 }
 

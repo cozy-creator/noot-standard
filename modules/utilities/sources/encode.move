@@ -1,13 +1,19 @@
 // General purpose functions for converting data types
 
+// Definitions:
+// Full-qualified type-name, or just 'type name' for short:
+// 0000000000000000000000000000000000000002::devnet_nft::DevNetNFT
+// This is <package_id>::<module_name>::<struct_name>
+// This does not include the 0x i the package-id, and they are all utf8 strings.
+// A 'module address' is just <package_id>::<module_name>
+
 module utils::encode {
-    use std::string::{Self, String};
+    use std::string::{Self, String, utf8};
     use std::vector;
     use std::ascii;
     use std::type_name;
     use sui::vec_map::{Self, VecMap};
     use sui::bcs;
-    use utils::rand;
 
     const EINVALID_TYPE_NAME: u64 = 0;
 
@@ -18,8 +24,8 @@ module utils::encode {
         let i = 0;
 
         while (i < vector::length(bytes)) {
-            let key = string::utf8(*vector::borrow(bytes, i));
-            let value = string::utf8(*vector::borrow(bytes, i + 1));
+            let key = utf8(*vector::borrow(bytes, i));
+            let value = utf8(*vector::borrow(bytes, i + 1));
 
             vec_map::insert(&mut output, key, value);
 
@@ -31,46 +37,65 @@ module utils::encode {
 
     // Ascii bytes are printed incorrectly by debug::print; utf8's are printed correctly, hence
     // we skip using ascii's and go straight to utf8's. Ascii is a subset of Utf8.
-    // The string returned is the fully-qualified type, with no abbreviations or 0x appended to addresses,
-    // Exmaples:
+    // The string returned is the fully-qualified type name, with no abbreviations or 0x appended to addresses,
+    // Examples:
     // 0000000000000000000000000000000000000002::devnet_nft::DevNetNFT
     // 0000000000000000000000000000000000000002::coin::Coin<0000000000000000000000000000000000000002::sui::SUI>
     // 0000000000000000000000000000000000000001::string::String
     public fun type_name<T>(): String {
         let ascii_name = type_name::into_string(type_name::get<T>());
-        string::utf8(ascii::into_bytes(ascii_name))
+        utf8(ascii::into_bytes(ascii_name))
     }
 
-    public fun type_name_<T>(): (String, String, String) {
+    public fun type_name_<T>(): (String, String) {
         decompose_type_name(type_name<T>())
     }
 
-    // Accepts a full-qualified type-string and decomposes it into (address, module name, type name).
+    // Accepts a full-qualified type-name strings and decomposes them into the tuple:
+    // (package-id, module name, struct name).
     // Example:
-    // (0000000000000000000000000000000000000002, devnet_nft, DevNetNFT)
+    // (0000000000000000000000000000000000000002::devnet_nft, 
+    // 0000000000000000000000000000000000000002, devnet_nft, DevNetNFT)
     // Aborts if the string does not conform to the `address::module::type` format
-    public fun decompose_type_name(s1: String): (String, String, String) {
-        let delimiter = string::utf8(b"::");
+    public fun decompose_type_name(s1: String): (String, String) {
+        let delimiter = utf8(b"::");
 
         let i = string::index_of(&s1, &delimiter);
         assert!(string::length(&s1) > i, EINVALID_TYPE_NAME);
-        let module_addr = string::sub_string(&s1, 0, i);
 
         let s2 = string::sub_string(&s1, i + 2, string::length(&s1));
         let j = string::index_of(&s2, &delimiter);
         assert!(string::length(&s2) > j, EINVALID_TYPE_NAME);
-        let module_name = string::sub_string(&s2, 0, j);
 
-        let type_name = string::sub_string(&s2, j + 2, string::length(&s2));
+        // let package_id = string::sub_string(&s1, 0, i);
+        // let module_name = string::sub_string(&s2, 0, j);
 
-        (module_addr, module_name, type_name)
+        let module_addr = string::sub_string(&s1, 0, i + j + 2);
+        let struct_name = string::sub_string(&s2, j + 2, string::length(&s2));
+
+        (module_addr, struct_name)
     }
 
     public fun is_same_module<Type1, Type2>(): bool {
-        let (addr1, module1, _) = type_name_<Type1>();
-        let (addr2, module2, _) = type_name_<Type2>();
+        let (module1, _) = type_name_<Type1>();
+        let (module2, _) = type_name_<Type2>();
 
-        (addr1 == addr2 && module1 == module2)
+        (module1 == module2)
+    }
+
+    public fun is_same_module_(type_name1: String, type_name2: String): bool {
+        let (module1, _) = decompose_type_name(type_name1);
+        let (module2, _) = decompose_type_name(type_name2);
+
+        (module1 == module2)
+    }
+
+    public fun append_struct_name<Type>(struct_name: String): String {
+        let (type_name, _) = type_name_<Type>();
+        string::append(&mut type_name, utf8(b"::"));
+        string::append(&mut type_name, struct_name);
+        
+        type_name
     }
 
     // addresses are 20 bytes, whereas the string-encoded version is 40 bytes.
@@ -82,7 +107,7 @@ module utils::encode {
         let i = 0;
         while (i < vector::length(&addr_bytes)) {
             // split the byte into halves
-            let low: u8 = rand::mod_u8(*vector::borrow(&addr_bytes, i), 16u8);
+            let low: u8 = *vector::borrow(&addr_bytes, i) % 16u8;
             let high: u8 = *vector::borrow(&addr_bytes, i) / 16u8;
             vector::push_back(&mut ascii_bytes, u8_to_ascii(high));
             vector::push_back(&mut ascii_bytes, u8_to_ascii(low));
@@ -90,7 +115,7 @@ module utils::encode {
         };
 
         let string = ascii::string(ascii_bytes);
-        string::utf8(ascii::into_bytes(string))
+        utf8(ascii::into_bytes(string))
     }
 
     public fun u8_to_ascii(num: u8): u8 {
@@ -149,9 +174,8 @@ module utils::encode_test {
         let _ctx = test_scenario::ctx(&mut scenario);
         {
             let name = encode::type_name<Coin<SUI>>();
-            let (addr, mod, type) = encode::decompose_type_name(name);
-            assert!(string::utf8(b"0000000000000000000000000000000000000002") == addr, 0);
-            assert!(string::utf8(b"coin") == mod, 0);
+            let (addr, type) = encode::decompose_type_name(name);
+            assert!(string::utf8(b"0000000000000000000000000000000000000002::coin") == addr, 0);
             assert!(string::utf8(b"Coin<0000000000000000000000000000000000000002::sui::SUI>") == type, 0);
         };
         test_scenario::end(scenario);
@@ -169,11 +193,11 @@ module utils::encode_test {
     }
 
     #[test]
-    #[expected_failure(abort_code = 0)]
+    #[expected_failure(abort_code = encode::EINVALID_TYPE_NAME)]
     public fun invalid_string() {
         let scenario = test_scenario::begin(@0x69);
         {
-            let (_addr, _mod, _type) = encode::decompose_type_name(string::utf8(b"123456"));
+            let (_addr, _type) = encode::decompose_type_name(string::utf8(b"123456"));
         };
         test_scenario::end(scenario);
     }
